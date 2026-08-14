@@ -29,7 +29,7 @@ propagation) is not met; what shipped is scoped honestly below.
 |-------|-------|-------|
 | **P0** | Schema, provenance envelope, store, diff, plugin contract | ✅ done |
 | **P1** | Deterministic core — L0/L1/L4/L5 extractors, Atlas | ✅ done |
-| **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ⚠️ shipped; retrieval gate not met leak-free |
+| **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ⚠️ shipped; retrieval gate mixed — parity on one repo, +7.4% on another |
 | **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
 | **P4** | L2 behavior, L3 semantics, full L6, rigorous eval | ✅ done |
 | **P5** | L7 memory, write-back, disputes, decay | ✅ done; gate met on a small sample |
@@ -41,35 +41,44 @@ propagation) is not met; what shipped is scoped honestly below.
 **Cold build.** 331,000 lines of Python (the CPython standard library) →
 234,268 records in **24.5s**, about 7.4s per 100k LOC against a 60s gate.
 
-**Retrieval — and a negative result.** `codebrain eval` generates its own
-benchmark from git history: each past commit is a task whose correct answer is
-the files it changed. Packs are compared against keyword search over the same
+**Retrieval — a mixed result, not a clean win.** `codebrain eval` generates its
+own benchmark from git history: each past commit is a task whose correct answer
+is the files it changed. Packs are compared against keyword search over the same
 repository, at identical k.
 
 Run leak-free, with a Brain per case built from that commit's *parent* so
 nothing in it can know the answer:
 
-| Repository | Files | Pack recall@k | Search recall@k | Delta |
-|---|---:|---:|---:|---:|
-| django (`--rigorous`, 20 cases) | 2,928 `.py` | 35.0% | 35.0% | **±0.0%** |
+| Repository | Files | Cases | Pack recall@k | Search recall@k | Delta |
+|---|---:|---:|---:|---:|---:|
+| django | 2,928 `.py` | 20 | 35.0% | 35.0% | ±0.0% |
+| a private multi-language desktop app | ~190, mixed Rust/JS/Python | 30 | 90.1% | 82.8% | **+7.4%** |
 
-**On file retrieval, leak-free, the pack does not beat keyword search.** It
-matches it. That is the honest number and it is the one to quote.
+Both runs are leak-free and both are genuinely unfamiliar repositories — the
+second is a real, currently-developed codebase with no prior exposure in this
+project's history, given by its owner specifically to test this claim. The two
+results disagree, and neither is discarded: on django the pack matches keyword
+search; on the private app it beats it by 7.4 points, 7 cases better and only 1
+worse out of 30. **What actually predicts the difference — repo shape, task
+style, something else — is an open question, not a claim this project makes.**
+Two data points support "it depends," not a universal number in either
+direction, and that is the honest state of the evidence.
 
-The fast mode — one Brain built from HEAD — reports +7.3% on the same
-repository, and most of that gap is leakage. The mechanism is specific: L4
-co-change coupling is computed over history that *includes the commit being
-tested*, so the precedent facet learns "these files change together" from the
-very commit it is being asked about. Both arms read the post-change tree, but
-only the pack gets that extra hint.
+The fast mode — one Brain built from HEAD — reports +7.3% on django, and most
+of that gap is leakage. The mechanism is specific: L4 co-change coupling is
+computed over history that *includes the commit being tested*, so the precedent
+facet learns "these files change together" from the very commit it is being
+asked about. Both arms read the post-change tree, but only the pack gets that
+extra hint.
 
-What the benchmark does **not** measure is everything the pack carries beyond
-its anchors: the contracts, the constraints, the verified runbook, the blast
-radius, the declared unknowns. Those are five of the six facets and they are the
-reason the pack exists — but "did it name the right files" cannot see them.
-Retrieval parity at ~1,000 tokens *plus* those facets may well be worth it; this
-harness cannot demonstrate that, and pretending otherwise would be exactly the
-kind of confident unverified claim the whole project is built to avoid.
+What the benchmark does **not** measure, on either repo, is everything the pack
+carries beyond its anchors: the contracts, the constraints, the verified
+runbook, the blast radius, the declared unknowns. Those are five of the six
+facets and they are the reason the pack exists — but "did it name the right
+files" cannot see them. Even at parity on file retrieval, those facets plus a
+budget-bounded pack may be worth it; this harness cannot demonstrate that, and
+pretending otherwise would be exactly the kind of confident unverified claim
+the whole project is built to avoid.
 
 Measuring the other facets needs agents completing real tasks.
 
