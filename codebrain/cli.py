@@ -18,6 +18,7 @@ import sys
 from pathlib import Path
 
 from . import __version__
+from .atlas import render as render_atlas
 from .diff import diff as diff_brains
 from .diff import render as render_diff
 from .model import LAYER_NAMES, Layer
@@ -107,10 +108,14 @@ def cmd_build(args: argparse.Namespace) -> int:
     result = run_build(ctx, providers)
     save(result.brain, out)
 
+    atlas_path = out / "ATLAS.md"
+    atlas_path.write_text(render_atlas(result.brain), encoding="utf-8", newline="\n")
+
     stats = result.brain.stats()
     print(f"Brain built at {out}")
     print(f"  {stats['total']} records{DOT}{stats['nodes']} nodes{DOT}"
           f"{stats['edges']} edges{DOT}{stats['facts']} facts")
+    print(f"  atlas:     {atlas_path}")
     print(f"  providers: {', '.join(result.ran) or 'none'}")
     if result.skipped:
         print(f"  skipped:   {', '.join(result.skipped)} (did not apply)")
@@ -202,6 +207,25 @@ def cmd_diff(args: argparse.Namespace) -> int:
     return 1 if (delta.substantive and args.check) else 0
 
 
+def cmd_atlas(args: argparse.Namespace) -> int:
+    try:
+        brain = load(args.brain)
+    except (BrainNotFound, ValueError) as exc:
+        print(f"codebrain: {exc}", file=sys.stderr)
+        return 2
+
+    text = render_atlas(brain)
+    if args.out == "-":
+        # May contain characters a legacy console cannot encode; streams are
+        # already configured to replace rather than raise.
+        print(text)
+    else:
+        target = Path(args.out) if args.out else Path(args.brain) / "ATLAS.md"
+        target.write_text(text, encoding="utf-8", newline="\n")
+        print(f"Atlas written to {target} ({len(text.splitlines())} lines)")
+    return 0
+
+
 def cmd_providers(args: argparse.Namespace) -> int:
     root = Path(args.root)
     ctx = _context(root) if root.is_dir() else None
@@ -269,6 +293,11 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--check", action="store_true",
                    help="exit non-zero on substantive change (CI drift gate)")
     p.set_defaults(func=cmd_diff)
+
+    p = sub.add_parser("atlas", help="regenerate the human-readable Atlas")
+    p.add_argument("brain", nargs="?", default=BRAIN_DIR)
+    p.add_argument("--out", default=None, help="output path, or - for stdout")
+    p.set_defaults(func=cmd_atlas)
 
     p = sub.add_parser("providers", help="list registered extractors")
     p.add_argument("root", nargs="?", default=".")

@@ -8,30 +8,16 @@ belief with better evidence.
 
 from __future__ import annotations
 
-import subprocess
 from typing import Iterable
 
 from ..envelope import Envelope, Evidence, Method, Status
+from ..gitutil import git_stripped
 from ..model import REPO, Fact, Layer, Node, Record
 from ..providers import BuildContext, Provider, register
 
-TIMEOUT = 20
-
 
 def git(ctx: BuildContext, *args: str) -> str | None:
-    """Run a git command, or return None. Never raises: a shallow clone, a
-    missing binary and a corrupt object store all mean the same thing here —
-    this provider has nothing to say."""
-    try:
-        proc = subprocess.run(
-            ("git", *args), cwd=str(ctx.root), capture_output=True, text=True,
-            timeout=TIMEOUT, encoding="utf-8", errors="replace",
-        )
-    except (OSError, subprocess.SubprocessError):
-        return None
-    if proc.returncode != 0:
-        return None
-    return proc.stdout.strip()
+    return git_stripped(ctx.root, *args)
 
 
 class GitMetaProvider(Provider):

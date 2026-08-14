@@ -20,20 +20,26 @@ begins informed instead of blind.
 
 ## Status
 
-**P0 — schema and store.** Complete. This is the foundation everything else
-conforms to, not a working product yet. Today CodeBrain can build, read, merge,
-diff and validate a Brain, with two extractors running behind the provider
-interface. Context packs and the MCP server land in P2.
+**P1 — the deterministic core.** Complete. CodeBrain now builds a real Brain
+from a real repository, entirely offline, with no API key: structure from the
+Python AST and a TS/JS scanner, operations from manifests and CI, intent from
+git archaeology, and a generated Atlas. Context packs and the MCP server — the
+first agent-facing value — land in P2.
 
 | Phase | Scope | State |
 |-------|-------|-------|
 | **P0** | Schema, provenance envelope, store, diff, plugin contract | ✅ done |
-| P1 | Deterministic core — structure, operations, git archaeology, Atlas | next |
-| P2 | Context packs + MCP server — first agent value | |
+| **P1** | Deterministic core — L0/L1/L4/L5 extractors, Atlas | ✅ done |
+| P2 | Context packs + MCP server — first agent value | next |
 | P3 | Verification by execution, drift gate | |
 | P4 | Semantics, behavior, constraints | |
 | P5 | Memory and agent write-back | |
 | P6 | Cortex — federation across repos | |
+
+**Cold build performance.** 331,000 lines of Python (the CPython standard
+library) → 234,268 records in **24.5s**, about 7.4s per 100k LOC. The P1 gate
+was 60s per 100k; the cold build is where adoption is won or lost, so it is
+measured, not assumed.
 
 ---
 
@@ -54,27 +60,62 @@ codebrain build && codebrain status
 
 ```
 Brain built at .brain
-  33 records · 21 nodes · 0 edges · 12 facts
-  providers: census, gitmeta
-
-33 records — 21 nodes, 0 edges, 12 facts
+  1656 records · 457 nodes · 1071 edges · 128 facts
+  atlas:     .brain\ATLAS.md
+  providers: census, gitmeta, history, structure-py, operations
 
   layer                         records
-    L0 corpus       ███████████████████···     28
-  · L1 structure    ······················      0
-    L4 intent       ███···················      5
+    L0 corpus       █·····················     40
+    L1 structure    ████████████████████··   1495
+    L4 intent       ██····················    118
+    L5 operations   █·····················      3
 
-  method        DERIVED 2   EXTRACTED 31
-  status        fresh 32   unverified 1
+  method        DERIVED 304   EXTRACTED 1352
+  status        fresh 1655   unverified 1
 ```
 
 Other commands:
 
 ```bash
+codebrain atlas --out -                  # the human-readable Atlas, to stdout
+```
+
+```bash
 codebrain providers                      # what can extract from this repo
+```
+
+```bash
 codebrain validate                       # structural problems, non-zero on failure
+```
+
+```bash
 codebrain diff old-brain new-brain --check   # the seed of the CI drift gate
 ```
+
+## What it extracts today
+
+| Provider | Layer | Reads | Produces |
+|---|---|---|---|
+| `census` | L0 | filesystem | files, sizes, language mix, primary language |
+| `gitmeta` | L0 · L4 | git | head, branch, remote, authors, commit count |
+| `history` | L4 | `git log --numstat` | churn, hotspots, ownership, co-change coupling |
+| `structure-py` | L1 | Python AST | modules, symbols, imports, resolved call graph |
+| `structure-ts` | L1 | TS/JS scanner | modules, declarations, import graph |
+| `operations` | L5 | manifests, Make, CI, Docker | build/test/run commands, pipelines, CODEOWNERS |
+
+Two extractors overlap on purpose. `census` guesses the repo name from the
+directory (`DERIVED` 0.5); `gitmeta` reads it from the remote (`EXTRACTED`
+0.98). The envelope settles it — a real disagreement resolved by evidence
+quality rather than by whichever provider ran last.
+
+## The Atlas
+
+`codebrain build` also writes `.brain/ATLAS.md`: the onboarding document that is
+always true because it is generated, not maintained. What this repo is, how to
+run it, the most depended-upon modules, where the risk sits (hotspots,
+single-author files, coupled files), who to ask — and a closing section stating
+**what the Brain does not know**, because a document that hides its gaps gets
+trusted exactly where it is weakest.
 
 ---
 
@@ -163,7 +204,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-69 tests, no external test runner required.
+149 tests, no external test runner required.
 
 ---
 
