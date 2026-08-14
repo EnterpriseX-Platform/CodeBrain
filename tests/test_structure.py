@@ -311,6 +311,40 @@ class TestTypeScriptStructure(unittest.TestCase):
         self.assertIsNotNone(gap)
         self.assertFalse(gap.value["call_graph"])
 
+    def test_a_name_redeclared_in_separate_scopes_keeps_both(self):
+        # A closure reusing a local name (e.g. two IIFEs each defining their own
+        # `close`) must not have the second silently overwrite the first.
+        brain = self._build({"main.js": (
+            "function outer1() {\n"
+            "  function close() { return 1; }\n"
+            "}\n"
+            "function outer2() {\n"
+            "  function close() { return 2; }\n"
+            "}\n"
+        )})
+        first = brain.get("L1:symbol:main.js#close")
+        second = brain.get("L1:symbol:main.js#close~2")
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(second)
+        self.assertEqual(second.attrs["qualname"], "close")
+        self.assertEqual(second.attrs["redefinition"], 2)
+        self.assertNotIn("redefinition", first.attrs)
+
+    def test_redefinitions_do_not_collide_in_the_merge(self):
+        result = build(BuildContext(root=self._root({"main.js": (
+            "function close() { return 1; }\n"
+            "function close() { return 2; }\n"
+        )})), [TypeScriptStructureProvider()])
+        self.assertEqual(result.report.kept, 0)
+
+    def _root(self, files: dict[str, str]) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        for rel, text in files.items():
+            write(root, rel, text)
+        return root
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -191,6 +191,15 @@ class TypeScriptStructureProvider(Provider):
                        src=f"{Layer.L0}:file:{rel}", dst=module_id,
                        env=env(Method.EXTRACTED, rel))
 
+            # A name can legitimately recur in one file: closures over the same
+            # local name in separate scopes, or a small handler reused per
+            # view/component. Without tracking occurrences, each redeclaration
+            # silently overwrote the last — 90 lost declarations in one real
+            # UI file was the signal that surfaced this. Later ones are
+            # suffixed by source order rather than dropped, mirroring the same
+            # fix already made for the Python extractor.
+            occurrences: dict[str, int] = {}
+
             for lineno, line in enumerate(lines, 1):
                 for spec in self._specifiers(line, literals):
                     target = resolve_specifier(spec, rel, known)
@@ -206,16 +215,20 @@ class TypeScriptStructureProvider(Provider):
                     if not match:
                         continue
                     name = match.group(1)
+                    occurrences[name] = occurrences.get(name, 0) + 1
+                    nth = occurrences[name]
+                    unique = name if nth == 1 else f"{name}~{nth}"
                     symbol_count += 1
                     yield Node(
-                        layer=Layer.L1, kind="symbol", key=f"{rel}#{name}", name=name,
+                        layer=Layer.L1, kind="symbol", key=f"{rel}#{unique}", name=name,
                         env=env(Method.DERIVED, rel, lineno,
                                 note="scanned, not parsed", confidence=0.85),
                         attrs={"symbol_kind": kind, "module": rel, "qualname": name,
-                               "exported": bool(EXPORTED.match(line))},
+                               "exported": bool(EXPORTED.match(line)),
+                               **({"redefinition": nth} if nth > 1 else {})},
                     )
                     yield Edge(layer=Layer.L1, kind="defines", src=module_id,
-                               dst=f"{Layer.L1}:symbol:{rel}#{name}",
+                               dst=f"{Layer.L1}:symbol:{rel}#{unique}",
                                env=env(Method.DERIVED, rel, lineno, confidence=0.85))
                     break
 
