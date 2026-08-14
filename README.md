@@ -89,22 +89,32 @@ and nothing else:
 
 | Repository | Cases | With memory | Without | Delta | Better / same / worse |
 |---|---:|---:|---:|---:|---|
-| django | 6 | 38.9% | 16.7% | **+22.2%** | 4 / 2 / 0 |
+| django | 6 | 38.9% | 16.7% | +22.2% | 4 / 2 / 0 |
 | requests | 13 | 84.6% | 84.6% | ±0.0% | 0 / 13 / 0 |
+| a private TypeScript/Next.js app | 10 | 70.4% | 28.7% | **+41.7%** | 9 / 1 / 0 |
 
 Memory pays where retrieval is hard and does nothing where it is already easy.
-On django, cold recall is 16.7% and there is room for a prior session to help;
-on requests it is 84.6% before memory says anything, so the metric is at its
-ceiling and no mechanism could move it.
+On requests cold recall is already 84.6%, at its ceiling, and no mechanism
+could move it. Where cold recall is lower — django at 16.7%, the third repo at
+28.7% — memory shows a real lift, and the largest effect landed on the repo
+with the most disambiguation to offer help with: a Next.js App Router codebase
+where **241 different files are all literally named `route.ts`**, distinguished
+only by their full path. A prior session recording *which exact* `route.ts` it
+touched is information keyword search structurally cannot replicate — checked
+directly on one case: the earlier session and the later task touched the exact
+same two files, and memory correctly re-surfaced the ambiguous one that plain
+matching could not tell apart from 240 others sharing its name.
 
-Two caveats, stated because the headline number is favourable:
+Three caveats, stated because the headline numbers are favourable:
 
-**Six cases is a small sample.** Suggestive, not conclusive.
+**Small samples.** Six, thirteen, and ten cases. Suggestive, not conclusive.
 
 **The harness selects for the favourable case.** It only pairs commits whose
 changed files overlap, so memory always points at files that are part of the
-answer. Real prior sessions frequently touch unrelated code. Read +22.2% as an
-upper bound on a related task, not as an average over sessions.
+answer. Real prior sessions frequently touch unrelated code. Read these deltas
+as an upper bound on a related task, not as an average over sessions — and this
+caveat bites hardest on the third repo, whose fast, iterative commit history
+produced more closely-related consecutive pairs than either of the other two.
 
 What would settle it is traces of two agents working the same problem in
 sequence — a commit is the end of a session, not a handoff mid-task, so git
