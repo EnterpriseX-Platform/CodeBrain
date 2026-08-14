@@ -35,7 +35,11 @@ INTENTS: dict[str, tuple[str, ...]] = {
 
 #: Source precedence when the same intent is claimed twice. A Makefile target
 #: usually wraps the underlying tool, and is what a human would actually type.
-SOURCE_RANK = {"makefile": 3, "package.json": 2, "pyproject.toml": 2, "workflow": 1}
+#: Cargo sits below package.json/pyproject: in a Tauri-shaped repo the real
+#: build step is the frontend tool wrapping the Rust crate, not `cargo build`
+#: on its own, and workflow-derived commands already rank correctly against it.
+SOURCE_RANK = {"makefile": 3, "package.json": 2, "pyproject.toml": 2,
+               "cargo.toml": 2, "workflow": 1}
 
 MAKE_TARGET = re.compile(r"^([A-Za-z0-9_][A-Za-z0-9_.\-/]*)\s*:(?!=)")
 WORKFLOW_RUN = re.compile(r"^\s*-?\s*run:\s*(.+?)\s*$")
@@ -68,6 +72,7 @@ class OperationsProvider(Provider):
 
         yield from self._package_json(ctx, env, candidates)
         yield from self._pyproject(ctx, env, candidates)
+        yield from self._cargo(ctx, env, candidates)
         yield from self._makefile(ctx, env, candidates)
         yield from self._workflows(ctx, env, candidates)
         yield from self._containers(ctx, env)
@@ -172,6 +177,55 @@ class OperationsProvider(Provider):
             if (ctx.root / "tests").is_dir():
                 candidates.append(("test", "python -m unittest discover -s tests -t .",
                                    "pyproject.toml", "pyproject.toml", None))
+
+    # -- rust -----------------------------------------------------------------
+
+    def _cargo(self, ctx, env, candidates) -> Iterable[Record]:
+        # Not root-only: every Tauri app — not just this one — keeps its
+        # Cargo.toml under src-tauri/, and a plain `find the root manifest`
+        # check misses every one of them.
+        manifests = sorted(p for p in ctx.iter_files() if p.name == "Cargo.toml")
+        if not manifests:
+            return
+
+        for path in manifests:
+            rel = ctx.rel(path)
+            try:
+                data = tomllib.loads(path.read_text(encoding="utf-8"))
+            except (tomllib.TOMLDecodeError, OSError):
+                continue
+
+            package = data.get("package") or {}
+            workspace = data.get("workspace")
+            if package or workspace:
+                predicate = ("rust_package" if len(manifests) == 1
+                            else f"rust_package:{rel}")
+                yield Fact(
+                    layer=Layer.L5, subject=REPO, predicate=predicate,
+                    value={"name": package.get("name"), "version": package.get("version"),
+                           "edition": package.get("edition"),
+                           "workspace": workspace is not None,
+                           "dependencies": len(data.get("dependencies") or {}),
+                           "manifest": rel},
+                    env=env(Method.EXTRACTED, rel),
+                )
+
+            # verify.py always runs commands with cwd at the repo root, so a
+            # manifest anywhere but the root needs --manifest-path or `cargo`
+            # looks for ./Cargo.toml, finds nothing, and wrongly refutes a test
+            # command that was actually fine.
+            test_cmd = ("cargo test" if rel == "Cargo.toml"
+                       else f"cargo test --manifest-path {rel}")
+            lint_cmd = ("cargo clippy" if rel == "Cargo.toml"
+                       else f"cargo clippy --manifest-path {rel}")
+
+            # `cargo test` is always a safe candidate — a crate with no #[test]
+            # functions still runs and reports zero, same as an empty pytest
+            # suite. `cargo build`/`cargo run` are deliberately not offered:
+            # in a Tauri-shaped repo they compile the crate alone, not the
+            # packaged app, and would be actively misleading as "the" command.
+            candidates.append(("test", test_cmd, "cargo.toml", rel, None))
+            candidates.append(("lint", lint_cmd, "cargo.toml", rel, None))
 
     # -- make ---------------------------------------------------------------
 
