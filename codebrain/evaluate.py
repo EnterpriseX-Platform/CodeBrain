@@ -341,6 +341,12 @@ def run_rigorous(root: Path, cases: list[Case], budget: int = 6000,
     from .providers import BuildContext
     from .providers import build as run_build
 
+    # Extractors register themselves on import. Without this the registry is
+    # empty for any caller that has not imported them, every Brain comes out
+    # with zero records, and the run reports "skipped" for every case instead
+    # of failing — a silent nothing that looks like a result.
+    from . import extractors  # noqa: F401
+
     report = Report()
     for index, case in enumerate(cases):
         parent = git_stripped(root, "rev-parse", f"{case.sha}^")

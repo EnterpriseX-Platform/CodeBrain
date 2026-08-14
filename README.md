@@ -27,7 +27,7 @@ populated, every one of them offline and deterministic.
 |-------|-------|-------|
 | **P0** | Schema, provenance envelope, store, diff, plugin contract | ✅ done |
 | **P1** | Deterministic core — L0/L1/L4/L5 extractors, Atlas | ✅ done |
-| **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ✅ done |
+| **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ⚠️ shipped; retrieval gate not met leak-free |
 | **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
 | **P4** | L2 behavior, L3 semantics, full L6, rigorous eval | ✅ done |
 | P5 | Memory and agent write-back | next |
@@ -38,36 +38,42 @@ populated, every one of them offline and deterministic.
 **Cold build.** 331,000 lines of Python (the CPython standard library) →
 234,268 records in **24.5s**, about 7.4s per 100k LOC against a 60s gate.
 
-**Retrieval.** `codebrain eval` generates its own benchmark from git history:
-each past commit is a task whose correct answer is the files it changed. Context
-packs are compared against keyword search over the same repository, at identical
-k.
+**Retrieval — and a negative result.** `codebrain eval` generates its own
+benchmark from git history: each past commit is a task whose correct answer is
+the files it changed. Packs are compared against keyword search over the same
+repository, at identical k.
+
+Run leak-free, with a Brain per case built from that commit's *parent* so
+nothing in it can know the answer:
 
 | Repository | Files | Pack recall@k | Search recall@k | Delta |
 |---|---:|---:|---:|---:|
-| django | 2,928 `.py` | **35.5%** | 28.2% | **+7.3%** |
-| requests | 37 `.py` | 80.5% | 84.2% | −3.7% |
+| django (`--rigorous`, 20 cases) | 2,928 `.py` | 35.0% | 35.0% | **±0.0%** |
 
-The pack wins where retrieval is hard and loses on a small flat repository —
-which is the honest result, not a flattering one. On 37 source files, keyword
-search can name a large share of the whole codebase at k, so recall@k barely
-discriminates; the metric runs out of headroom before the method does. Both
-numbers are reported because reporting only django would be a lie of omission.
+**On file retrieval, leak-free, the pack does not beat keyword search.** It
+matches it. That is the honest number and it is the one to quote.
 
-Run it yourself:
+The fast mode — one Brain built from HEAD — reports +7.3% on the same
+repository, and most of that gap is leakage. The mechanism is specific: L4
+co-change coupling is computed over history that *includes the commit being
+tested*, so the precedent facet learns "these files change together" from the
+very commit it is being asked about. Both arms read the post-change tree, but
+only the pack gets that extra hint.
+
+What the benchmark does **not** measure is everything the pack carries beyond
+its anchors: the contracts, the constraints, the verified runbook, the blast
+radius, the declared unknowns. Those are five of the six facets and they are the
+reason the pack exists — but "did it name the right files" cannot see them.
+Retrieval parity at ~1,000 tokens *plus* those facets may well be worth it; this
+harness cannot demonstrate that, and pretending otherwise would be exactly the
+kind of confident unverified claim the whole project is built to avoid.
+
+Measuring the other facets needs agents completing real tasks, which is P5's
+problem.
 
 ```bash
-codebrain eval --cases 60 --verbose
-```
-
-Those numbers carry a known leak: the Brain is built from HEAD, so it has seen
-the finished state of the code these commits produced. `--rigorous` removes it —
-each case gets its own Brain, built from that commit's *parent* in a detached
-worktree, so nothing in it can know the answer. It costs a full extraction per
-case, which is why it is opt-in rather than the default:
-
-```bash
-codebrain eval --cases 20 --rigorous
+codebrain eval --cases 60              # fast, leaky, good for iteration
+codebrain eval --cases 20 --rigorous   # slow, leak-free, the number to quote
 ```
 
 ---
@@ -403,7 +409,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-344 tests, no external test runner required.
+345 tests, no external test runner required.
 
 ---
 

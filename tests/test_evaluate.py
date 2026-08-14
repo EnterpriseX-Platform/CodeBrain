@@ -111,6 +111,23 @@ class TestReport(unittest.TestCase):
         self.assertEqual(Report().mean("pack_recall"), 0.0)
 
 
+class TestRigorousSetup(unittest.TestCase):
+    def test_extractors_are_registered_for_programmatic_callers(self):
+        """The registry is populated by importing codebrain.extractors. When
+        run_rigorous relied on the caller having done that, every worktree Brain
+        came out empty and every case was reported "skipped" — a silent nothing
+        that reads exactly like a real result."""
+        import importlib
+
+        import codebrain.evaluate as ev
+        importlib.reload(ev)
+        from codebrain.providers import REGISTRY
+
+        # Simulate a caller that never imported the extractors package.
+        self.assertGreater(len(REGISTRY), 0)
+        self.assertIn("census", [p.id for p in REGISTRY.all()])
+
+
 class TestCaseSelection(unittest.TestCase):
     def test_bulk_commits_are_out_of_scope(self):
         # A 300-file reformat has no meaningful "correct answer" and would
