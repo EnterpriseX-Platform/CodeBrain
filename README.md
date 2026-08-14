@@ -29,7 +29,7 @@ propagation) is not met; what shipped is scoped honestly below.
 |-------|-------|-------|
 | **P0** | Schema, provenance envelope, store, diff, plugin contract | ✅ done |
 | **P1** | Deterministic core — L0/L1/L4/L5 extractors, Atlas | ✅ done |
-| **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ⚠️ shipped; retrieval gate mixed — parity on one repo, +7.4% on another |
+| **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ⚠️ shipped; retrieval gate mostly parity (2/3 repos), one clear outlier |
 | **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
 | **P4** | L2 behavior, L3 semantics, full L6, rigorous eval | ✅ done |
 | **P5** | L7 memory, write-back, disputes, decay | ✅ done; gate met on a small sample |
@@ -41,28 +41,29 @@ propagation) is not met; what shipped is scoped honestly below.
 **Cold build.** 331,000 lines of Python (the CPython standard library) →
 234,268 records in **24.5s**, about 7.4s per 100k LOC against a 60s gate.
 
-**Retrieval — a mixed result, not a clean win.** `codebrain eval` generates its
-own benchmark from git history: each past commit is a task whose correct answer
-is the files it changed. Packs are compared against keyword search over the same
-repository, at identical k.
+**Retrieval — parity is the norm, with one outlier.** `codebrain eval`
+generates its own benchmark from git history: each past commit is a task whose
+correct answer is the files it changed. Packs are compared against keyword
+search over the same repository, at identical k.
 
 Run leak-free, with a Brain per case built from that commit's *parent* so
 nothing in it can know the answer:
 
-| Repository | Files | Cases | Pack recall@k | Search recall@k | Delta |
-|---|---:|---:|---:|---:|---:|
-| django | 2,928 `.py` | 20 | 35.0% | 35.0% | ±0.0% |
-| a private multi-language desktop app | ~190, mixed Rust/JS/Python | 30 | 90.1% | 82.8% | **+7.4%** |
+| Repository | Files | Cases | Pack recall@k | Search recall@k | Delta | Better / same / worse |
+|---|---:|---:|---:|---:|---:|---|
+| django | 2,928 `.py` | 20 | 35.0% | 35.0% | ±0.0% | 0 / 20 / 0 |
+| a private TypeScript/Next.js app | ~900 `.ts`/`.tsx` | 30 | 29.8% | 29.0% | +0.8% | 2 / 27 / 1 |
+| a private multi-language desktop app | ~190, mixed Rust/JS/Python | 30 | 90.1% | 82.8% | **+7.4%** | 7 / 22 / 1 |
 
-Both runs are leak-free and both are genuinely unfamiliar repositories — the
-second is a real, currently-developed codebase with no prior exposure in this
-project's history, given by its owner specifically to test this claim. The two
-results disagree, and neither is discarded: on django the pack matches keyword
-search; on the private app it beats it by 7.4 points, 7 cases better and only 1
-worse out of 30. **What actually predicts the difference — repo shape, task
-style, something else — is an open question, not a claim this project makes.**
-Two data points support "it depends," not a universal number in either
-direction, and that is the honest state of the evidence.
+All three runs are leak-free, and all three are genuinely unfamiliar
+repositories the pack has no prior exposure to. **Two of three land at parity
+— +0.8% is not distinguishable from noise at n=30, 27 of those cases tied
+exactly.** Only the third repository shows a real, repeatable lift. Reporting
+"two data points, it depends" after the first two repos would have been
+premature; a third repo lands the honest read closer to *parity is the norm on
+file retrieval, and one repository so far is a genuine outlier* — not a
+pattern this project can yet explain, and not a claim it makes about which
+repos will land where.
 
 The fast mode — one Brain built from HEAD — reports +7.3% on django, and most
 of that gap is leakage. The mechanism is specific: L4 co-change coupling is
@@ -587,7 +588,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-471 tests, no external test runner required.
+481 tests, no external test runner required.
 
 ---
 
