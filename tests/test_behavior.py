@@ -135,6 +135,109 @@ class TestBehavior(unittest.TestCase):
         self.assertIsNotNone(node)
         self.assertEqual(node.attrs["trigger"], "task")
 
+    # -- Django urlpatterns --------------------------------------------------
+
+    def test_django_path_route(self):
+        brain = self._build({"urls.py":
+                             "from django.urls import path\n"
+                             "from . import views\n"
+                             "urlpatterns = [\n"
+                             "    path('api/users/', views.user_list),\n"
+                             "]\n"})
+        node = brain.get("L2:route:ANY api/users/")
+        self.assertIsNotNone(node)
+        self.assertEqual(node.attrs["handler"], "views.user_list")
+        self.assertEqual(node.attrs["framework"], "django")
+
+    def test_django_method_is_recorded_as_any_not_guessed(self):
+        brain = self._build({"urls.py":
+                             "from django.urls import path\n"
+                             "from . import views\n"
+                             "urlpatterns = [path('x/', views.f)]\n"})
+        node = brain.get("L2:route:ANY x/")
+        self.assertEqual(node.attrs["method"], "ANY")
+        self.assertIn("not determinable", node.env.note)
+
+    def test_django_class_based_view_module_qualified(self):
+        # The common real form: the view is reached through the module it was
+        # imported as (`from . import views`), not a bare name.
+        brain = self._build({"urls.py":
+                             "from django.urls import path\n"
+                             "from . import views\n"
+                             "urlpatterns = [\n"
+                             "    path('api/users/', views.UserListView.as_view()),\n"
+                             "]\n"})
+        node = brain.get("L2:route:ANY api/users/")
+        self.assertIsNotNone(node)
+        self.assertEqual(node.attrs["handler"], "UserListView")
+
+    def test_django_class_based_view_bare_name(self):
+        brain = self._build({"urls.py":
+                             "from django.urls import path\n"
+                             "from .views import UserListView\n"
+                             "urlpatterns = [\n"
+                             "    path('api/users/', UserListView.as_view()),\n"
+                             "]\n"})
+        node = brain.get("L2:route:ANY api/users/")
+        self.assertIsNotNone(node)
+        self.assertEqual(node.attrs["handler"], "UserListView")
+
+    def test_django_re_path_and_url_are_both_recognised(self):
+        brain = self._build({"urls.py":
+                             "from django.urls import re_path\n"
+                             "from django.conf.urls import url\n"
+                             "from . import views\n"
+                             "urlpatterns = [\n"
+                             "    re_path(r'^legacy/(?P<id>\\d+)/$', views.legacy),\n"
+                             "    url(r'^old/$', views.old),\n"
+                             "]\n"})
+        self.assertIsNotNone(brain.get(r"L2:route:ANY ^legacy/(?P<id>\d+)/$"))
+        self.assertIsNotNone(brain.get("L2:route:ANY ^old/$"))
+
+    def test_django_url_name_kwarg_is_captured(self):
+        brain = self._build({"urls.py":
+                             "from django.urls import path\n"
+                             "from . import views\n"
+                             "urlpatterns = [\n"
+                             "    path('x/', views.f, name='x-detail'),\n"
+                             "]\n"})
+        self.assertEqual(brain.get("L2:route:ANY x/").attrs["django_name"], "x-detail")
+
+    def test_django_include_is_not_treated_as_a_route(self):
+        # include() mounts another urlconf this pass does not traverse into —
+        # emitting a fake route for it would be worse than omitting it.
+        brain = self._build({"urls.py":
+                             "from django.urls import path, include\n"
+                             "urlpatterns = [\n"
+                             "    path('api/', include('myapp.urls')),\n"
+                             "]\n"})
+        self.assertEqual([n for n in brain.nodes.values() if n.kind == "route"], [])
+
+    def test_django_routes_are_extracted_not_derived(self):
+        # Detecting path()/re_path() inside urlpatterns is as unambiguous as a
+        # decorator — Django's own machinery resolves routing this way.
+        brain = self._build({"urls.py":
+                             "from django.urls import path\n"
+                             "from . import views\n"
+                             "urlpatterns = [path('x/', views.f)]\n"})
+        self.assertIs(brain.get("L2:route:ANY x/").env.method, Method.EXTRACTED)
+
+    def test_a_variable_not_named_urlpatterns_is_ignored(self):
+        brain = self._build({"urls.py":
+                             "from django.urls import path\n"
+                             "from . import views\n"
+                             "other_list = [path('x/', views.f)]\n"})
+        self.assertEqual([n for n in brain.nodes.values() if n.kind == "route"], [])
+
+    def test_no_handled_by_edge_is_invented_across_files(self):
+        # The view usually lives in a different file this pass has not
+        # resolved; a wrong cross-file edge is worse than no edge.
+        brain = self._build({"urls.py":
+                             "from django.urls import path\n"
+                             "from . import views\n"
+                             "urlpatterns = [path('x/', views.f)]\n"})
+        self.assertEqual([e for e in brain.edges.values() if e.kind == "handled_by"], [])
+
     # -- config and data ---------------------------------------------------
 
     def test_environment_reads_are_captured(self):
@@ -170,7 +273,8 @@ class TestBehavior(unittest.TestCase):
         brain = self._build({"a.py": "x = 1\n"})
         gap = brain.fact(REPO, "behavior_coverage_gap", Layer.L2)
         self.assertIsNotNone(gap)
-        self.assertIn("Django urlpatterns", gap.value["misses"])
+        self.assertIn("Django urlpatterns (path/re_path/url)", gap.value["detects"])
+        self.assertTrue(any("HTTP methods" in m for m in gap.value["misses"]))
         self.assertIn("not proof", gap.value["impact"])
 
     def test_summary_counts(self):

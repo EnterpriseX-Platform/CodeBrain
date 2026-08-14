@@ -193,11 +193,15 @@ class BehaviorProvider(Provider):
             layer=Layer.L2, subject=REPO, predicate="behavior_coverage_gap",
             value={"detects": ["decorator routes", "express-style routes",
                                "Next.js App Router route.ts handlers",
+                               "Django urlpatterns (path/re_path/url)",
                                "__main__ entrypoints", "decorator jobs"],
-                   "misses": ["Django urlpatterns", "dynamically mounted routes",
+                   "misses": ["dynamically mounted routes",
                               "config-driven schedulers", "message consumers",
                               "Next.js Pages Router (pages/api/*)",
-                              "re-exported or arrow-function route handlers"],
+                              "re-exported or arrow-function route handlers",
+                              "Django include() sub-URLconfs are not traversed",
+                              "Django route HTTP methods (dispatch is inside the "
+                              "view, not the URL config — recorded as ANY)"],
                    "impact": "a route count of zero is not proof of no HTTP surface"},
             env=env(Method.EXTRACTED, "."),
         )
@@ -225,6 +229,8 @@ class BehaviorProvider(Provider):
                     db_users.add(root)
                 if root in NET_MODULES:
                     net_users.add(root)
+
+        yield from self._django_urls(tree, rel, env)
 
         # `if __name__ == "__main__":` — the process starts here.
         for node in tree.body:
@@ -279,6 +285,87 @@ class BehaviorProvider(Provider):
                     yield Edge(layer=Layer.L2, kind="handled_by",
                                src=f"{Layer.L2}:job:{key}", dst=symbol_id,
                                env=env(Method.EXTRACTED, rel, node.lineno))
+
+    def _django_urls(self, tree: ast.Module, rel: str, env) -> Iterable[Record]:
+        """Django's URL config: a module-level `urlpatterns = [...]` list of
+        `path()`/`re_path()`/`url()` calls. Detected by the variable name, not
+        the filename — Django itself treats any module with that name as a
+        URLconf, wherever it lives, the same principle already used for Next.js
+        App Router's filename convention: detect however the framework itself
+        determines the mapping.
+
+        Two things this deliberately does not do. It never guesses the HTTP
+        method: Django dispatches by the *view's* own method handling, not by
+        anything written in urls.py, so the verb is recorded as ANY rather than
+        invented. And it never emits a handled_by edge to the view: the view
+        function typically lives in a different file (`views.py`) reached
+        through an import this pass has not resolved, and a wrong cross-file
+        edge is worse than no edge.
+        """
+        for node in ast.walk(tree):
+            if not isinstance(node, ast.Assign):
+                continue
+            if not any(isinstance(t, ast.Name) and t.id == "urlpatterns"
+                      for t in node.targets):
+                continue
+            if not isinstance(node.value, ast.List):
+                continue
+
+            for element in node.value.elts:
+                if not isinstance(element, ast.Call) or not element.args:
+                    continue
+                func = element.func
+                func_name = (func.id if isinstance(func, ast.Name)
+                            else func.attr if isinstance(func, ast.Attribute) else None)
+                if func_name not in ("path", "re_path", "url"):
+                    continue
+
+                route_path = literal(element.args[0])
+                if not route_path:
+                    continue
+                handler = (self._django_view_name(element.args[1])
+                          if len(element.args) > 1 else None)
+                if handler is None:
+                    continue  # an include() mount or something unnamed — not guessed at
+
+                attrs = {"method": "ANY", "path": route_path, "handler": handler,
+                         "module": rel, "framework": "django"}
+                for keyword in element.keywords:
+                    if keyword.arg == "name":
+                        name = literal(keyword.value)
+                        if name:
+                            attrs["django_name"] = name
+
+                key = f"ANY {route_path}"
+                yield Node(
+                    layer=Layer.L2, kind="route", key=key, name=key,
+                    env=env(Method.EXTRACTED, rel, element.lineno,
+                            note="HTTP method is not determinable from urlpatterns "
+                                 "alone — Django dispatches by the view's own method "
+                                 "handling"),
+                    attrs=attrs,
+                )
+
+    @staticmethod
+    def _django_view_name(node: ast.AST) -> str | None:
+        if isinstance(node, ast.Name):
+            return node.id
+        if isinstance(node, ast.Attribute) and isinstance(node.value, ast.Name):
+            return f"{node.value.id}.{node.attr}"  # views.my_view, kept module-qualified
+        if isinstance(node, ast.Call):
+            # The class name is the meaningful handler, however it was
+            # reached: UserListView.as_view() (bare) and
+            # views.UserListView.as_view() (module-qualified) both resolve to
+            # "UserListView". Anything else callable here — notably
+            # include() — is deliberately left unnamed.
+            target = node.func
+            if isinstance(target, ast.Attribute) and target.attr == "as_view":
+                inner = target.value
+                if isinstance(inner, ast.Name):
+                    return inner.id
+                if isinstance(inner, ast.Attribute):
+                    return inner.attr
+        return None
 
     @staticmethod
     def _env_reads(node: ast.AST) -> list[str]:
