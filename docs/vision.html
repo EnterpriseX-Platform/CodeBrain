@@ -1,0 +1,854 @@
+<title>CodeBrain</title>
+<style>
+  /* ---------- tokens: light (bare :root = complete palette) ---------- */
+  :root {
+    --paper:      #F1EFF3;
+    --surface:    #FBFAFC;
+    --surface-2:  #E9E6EE;
+    --ink:        #1B1722;
+    --ink-2:      #4A4356;
+    --ink-3:      #7A7288;
+    --rule:       #D8D3DF;
+    --rule-2:     #C3BCCD;
+    --stain:      #9E2B5C;   /* carmine — the specimen stain */
+    --stain-soft: #F2DCE5;
+    --slate:      #2F5D6B;   /* second channel */
+    --slate-soft: #DCE7EA;
+
+    --f-display: Constantia, "Iowan Old Style", Charter, Cambria, Georgia, "Times New Roman", serif;
+    --f-body:    "Segoe UI", -apple-system, BlinkMacSystemFont, "Helvetica Neue", Arial, sans-serif;
+    --f-mono:    Consolas, "SF Mono", Menlo, "Cascadia Mono", ui-monospace, monospace;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --paper:      #141119;
+      --surface:    #1C1823;
+      --surface-2:  #262030;
+      --ink:        #EAE6EF;
+      --ink-2:      #B4ACC0;
+      --ink-3:      #857C93;
+      --rule:       #322B3D;
+      --rule-2:     #453D53;
+      --stain:      #E0698F;
+      --stain-soft: #3A1F2C;
+      --slate:      #74AABA;
+      --slate-soft: #1D2E34;
+    }
+  }
+  :root[data-theme="dark"] {
+    --paper:      #141119;
+    --surface:    #1C1823;
+    --surface-2:  #262030;
+    --ink:        #EAE6EF;
+    --ink-2:      #B4ACC0;
+    --ink-3:      #857C93;
+    --rule:       #322B3D;
+    --rule-2:     #453D53;
+    --stain:      #E0698F;
+    --stain-soft: #3A1F2C;
+    --slate:      #74AABA;
+    --slate-soft: #1D2E34;
+  }
+
+  /* ---------- base ---------- */
+  * { box-sizing: border-box; }
+  body {
+    background: var(--paper);
+    color: var(--ink);
+    font-family: var(--f-body);
+    font-size: 16px;
+    line-height: 1.62;
+    margin: 0;
+    padding: 0 24px 96px;
+    -webkit-font-smoothing: antialiased;
+  }
+  .page { max-width: 1000px; margin: 0 auto; }
+  p { margin: 0; }
+  a { color: var(--stain); }
+  :focus-visible { outline: 2px solid var(--stain); outline-offset: 3px; }
+
+  .eyebrow {
+    font-family: var(--f-mono);
+    font-size: 11px;
+    letter-spacing: .16em;
+    text-transform: uppercase;
+    color: var(--ink-3);
+  }
+
+  /* ---------- masthead ---------- */
+  header.mast { padding: 80px 0 44px; border-bottom: 1px solid var(--rule-2); }
+  .mast-grid { display: grid; grid-template-columns: 84px minmax(0,1fr); gap: 28px; }
+  .mast h1 {
+    font-family: var(--f-display);
+    font-weight: 400;
+    font-size: clamp(46px, 8vw, 82px);
+    line-height: .96;
+    letter-spacing: -.018em;
+    margin: 0 0 20px;
+    text-wrap: balance;
+  }
+  .mast h1 em { font-style: italic; color: var(--stain); }
+  .lede {
+    font-family: var(--f-display);
+    font-size: clamp(19px, 2.4vw, 23px);
+    line-height: 1.5;
+    color: var(--ink-2);
+    max-width: 60ch;
+  }
+  .meta {
+    display: flex; flex-wrap: wrap; gap: 8px 20px;
+    margin-top: 30px; padding-top: 18px;
+    border-top: 1px solid var(--rule);
+    font-family: var(--f-mono); font-size: 11.5px;
+    letter-spacing: .08em; text-transform: uppercase; color: var(--ink-3);
+  }
+  .meta b { color: var(--stain); font-weight: 600; }
+
+  /* ---------- section scaffold: specimen margin ---------- */
+  .sec {
+    display: grid;
+    grid-template-columns: 84px minmax(0,1fr);
+    gap: 28px;
+    padding: 56px 0;
+    border-bottom: 1px solid var(--rule);
+  }
+  .sec:last-of-type { border-bottom: 0; }
+  .mark { position: sticky; top: 24px; align-self: start; }
+  .mark .num {
+    display: block;
+    font-family: var(--f-mono); font-size: 12px; letter-spacing: .1em;
+    color: var(--stain);
+  }
+  .mark .tick { display: block; width: 34px; height: 1px; background: var(--rule-2); margin-top: 12px; }
+  .body { min-width: 0; max-width: 760px; display: flex; flex-direction: column; gap: 22px; }
+
+  h2 {
+    font-family: var(--f-display); font-weight: 400;
+    font-size: clamp(28px, 4vw, 38px); line-height: 1.14;
+    letter-spacing: -.012em; margin: 0; text-wrap: balance;
+  }
+  h3 {
+    font-family: var(--f-display); font-weight: 600;
+    font-size: 20px; line-height: 1.3; margin: 14px 0 0;
+  }
+  .body > p { max-width: 66ch; }
+  .dek { color: var(--ink-2); font-size: 17px; max-width: 62ch; }
+
+  strong { font-weight: 600; color: var(--ink); }
+  code {
+    font-family: var(--f-mono); font-size: .87em;
+    background: var(--surface-2); color: var(--ink);
+    padding: 1px 5px; border-radius: 3px;
+  }
+
+  /* ---------- pull statement ---------- */
+  .thesis {
+    border-left: 2px solid var(--stain);
+    padding: 6px 0 6px 24px;
+    font-family: var(--f-display);
+    font-size: clamp(21px, 2.8vw, 26px);
+    line-height: 1.42;
+    color: var(--ink);
+    max-width: 56ch;
+  }
+
+  /* ---------- figures ---------- */
+  figure { margin: 10px 0; }
+  .scroll { overflow-x: auto; }
+  figure svg { display: block; width: 100%; min-width: 560px; height: auto; color: var(--ink-2); }
+  figcaption {
+    margin-top: 12px; font-size: 13.5px; line-height: 1.5;
+    color: var(--ink-3); max-width: 62ch;
+  }
+  .svg-box  { fill: var(--surface); stroke: var(--rule-2); }
+  .svg-key  { fill: var(--stain-soft); stroke: var(--stain); }
+  .svg-alt  { fill: var(--slate-soft); stroke: var(--slate); }
+  .svg-t    { fill: var(--ink); font-family: var(--f-body); font-size: 12.5px; }
+  .svg-t.sm { fill: var(--ink-3); font-size: 10.5px; }
+  .svg-t.hd { fill: var(--ink-3); font-family: var(--f-mono); font-size: 10.5px; letter-spacing: .12em; }
+  .svg-t.on { fill: var(--stain); }
+  .svg-l    { stroke: var(--rule-2); fill: none; }
+  .svg-l.on { stroke: var(--stain); }
+
+  /* ---------- strata (the layer stack) ---------- */
+  .strata { border: 1px solid var(--rule-2); border-radius: 2px; overflow: hidden; background: var(--surface); }
+  .stratum {
+    display: grid;
+    grid-template-columns: 52px minmax(0,1fr) 108px;
+    gap: 0 18px;
+    align-items: baseline;
+    padding: 15px 18px;
+    border-bottom: 1px solid var(--rule);
+  }
+  .strata .stratum:last-child { border-bottom: 0; }
+  .stratum .lcode { font-family: var(--f-mono); font-size: 12px; color: var(--stain); letter-spacing: .04em; }
+  .stratum .lname { font-family: var(--f-display); font-size: 17px; font-weight: 600; }
+  .stratum .lq { display: block; font-size: 14px; color: var(--ink-2); line-height: 1.45; margin-top: 2px; }
+  .stratum .lsrc { display: block; font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); margin-top: 6px; }
+  .pill {
+    justify-self: start;
+    font-family: var(--f-mono); font-size: 9.5px; letter-spacing: .1em;
+    padding: 3px 7px; border-radius: 2px; white-space: nowrap;
+  }
+  .m-ext { background: var(--slate-soft); color: var(--slate); border: 1px solid var(--slate); }
+  .m-der { background: transparent; color: var(--ink-2); border: 1px solid var(--rule-2); }
+  .m-inf { background: var(--stain-soft); color: var(--stain); border: 1px dashed var(--stain); }
+  .m-acc { background: transparent; color: var(--ink-3); border: 1px dotted var(--rule-2); }
+
+  /* ---------- principles ---------- */
+  .prins { display: grid; gap: 0; border-top: 1px solid var(--rule); }
+  .prin {
+    display: grid; grid-template-columns: 34px minmax(0,1fr); gap: 16px;
+    padding: 14px 0; border-bottom: 1px solid var(--rule);
+  }
+  .prin .pn { font-family: var(--f-mono); font-size: 11px; color: var(--ink-3); padding-top: 4px; }
+  .prin b { font-family: var(--f-display); font-size: 17px; font-weight: 600; }
+  .prin span { display: block; color: var(--ink-2); font-size: 14.5px; line-height: 1.5; margin-top: 1px; }
+
+  /* ---------- tables ---------- */
+  table { border-collapse: collapse; width: 100%; font-size: 14px; min-width: 480px; }
+  th {
+    text-align: left; font-family: var(--f-mono); font-weight: 400;
+    font-size: 10.5px; letter-spacing: .1em; text-transform: uppercase;
+    color: var(--ink-3); padding: 0 14px 9px 0; border-bottom: 1px solid var(--rule-2);
+  }
+  td { padding: 11px 14px 11px 0; border-bottom: 1px solid var(--rule); vertical-align: top; line-height: 1.5; color: var(--ink-2); }
+  td:first-child { color: var(--ink); font-weight: 600; white-space: nowrap; }
+  td.num { font-family: var(--f-mono); font-variant-numeric: tabular-nums; color: var(--ink); white-space: nowrap; }
+
+  /* ---------- terminal / file blocks ---------- */
+  .term {
+    font-family: var(--f-mono); font-size: 12.5px; line-height: 1.66;
+    background: var(--surface); color: var(--ink-2);
+    border: 1px solid var(--rule-2); border-radius: 2px;
+    padding: 16px 18px; margin: 0; overflow-x: auto; white-space: pre;
+  }
+  .term b { color: var(--stain); font-weight: 600; }
+  .term i { color: var(--slate); font-style: normal; }
+  .term u { color: var(--ink-3); text-decoration: none; }
+
+  /* ---------- roadmap ---------- */
+  .phase {
+    display: grid; grid-template-columns: 66px minmax(0,1fr); gap: 20px;
+    padding: 20px 0; border-bottom: 1px solid var(--rule);
+  }
+  .phase:first-of-type { border-top: 1px solid var(--rule-2); }
+  .pcode { font-family: var(--f-mono); font-size: 12px; color: var(--stain); }
+  .pspan { display: block; font-family: var(--f-mono); font-size: 10.5px; color: var(--ink-3); margin-top: 4px; }
+  .phase h3 { margin: 0 0 4px; }
+  .phase p { font-size: 14.5px; color: var(--ink-2); max-width: 60ch; }
+  .gate {
+    margin-top: 10px; padding: 9px 12px;
+    background: var(--surface); border: 1px solid var(--rule-2); border-left: 2px solid var(--stain);
+    font-size: 13.5px; color: var(--ink-2); max-width: 60ch;
+  }
+  .gate b { font-family: var(--f-mono); font-size: 10px; letter-spacing: .11em; text-transform: uppercase; color: var(--stain); display: block; margin-bottom: 2px; }
+
+  /* ---------- risks ---------- */
+  .risk { padding: 15px 0; border-bottom: 1px solid var(--rule); }
+  .risk b { font-family: var(--f-display); font-size: 17px; font-weight: 600; }
+  .risk p { font-size: 14.5px; color: var(--ink-2); margin-top: 3px; }
+  .risk .mit { color: var(--ink-2); font-size: 14px; margin-top: 6px; }
+  .risk .mit em { font-family: var(--f-mono); font-style: normal; font-size: 10px; letter-spacing: .11em; text-transform: uppercase; color: var(--slate); margin-right: 8px; }
+
+  footer {
+    margin-top: 20px; padding-top: 26px; border-top: 1px solid var(--rule-2);
+    font-family: var(--f-mono); font-size: 11px; letter-spacing: .09em;
+    text-transform: uppercase; color: var(--ink-3);
+    display: flex; flex-wrap: wrap; gap: 6px 22px;
+  }
+
+  @media (max-width: 720px) {
+    body { padding: 0 18px 72px; }
+    .sec, .mast-grid { grid-template-columns: 1fr; gap: 14px; }
+    .mark { position: static; display: flex; align-items: center; gap: 12px; }
+    .mark .tick { margin-top: 0; width: 100%; flex: 1; }
+    .stratum { grid-template-columns: 46px minmax(0,1fr); }
+    .stratum .pill { grid-column: 2; margin-top: 9px; }
+    .phase { grid-template-columns: 1fr; gap: 8px; }
+  }
+  @media (prefers-reduced-motion: reduce) { * { animation: none !important; transition: none !important; } }
+</style>
+
+<div class="page">
+
+<header class="mast">
+  <div class="mast-grid">
+    <div class="mark"><span class="num">◆</span></div>
+    <div>
+      <p class="eyebrow">Platform blueprint · vision, design, roadmap</p>
+      <h1>Code<em>Brain</em></h1>
+      <p class="lede">A repository stores code. It does not store understanding — so every agent that touches it rebuilds a mental model from scratch, gets it partly wrong, and throws it away. CodeBrain turns a repository into a <em>Brain</em>: a durable, versioned, cited model of the system that agents and humans share across the entire software lifecycle.</p>
+      <div class="meta">
+        <span>Draft <b>v0.1</b></span>
+        <span>14 Aug 2026</span>
+        <span>Greenfield · legacy · systems-of-systems</span>
+      </div>
+    </div>
+  </div>
+</header>
+
+<!-- ================= 01 PROBLEM ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">01</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>The bottleneck is comprehension, not capability</h2>
+    <p class="dek">Coding agents are good enough to do the work. They fail on real systems for a duller reason: they never get to <em>know</em> the system.</p>
+    <p>Every session starts amnesiac. The agent greps, opens a handful of files, assembles a fragile model inside its context window, acts on it, and at session end the model evaporates. The next agent — or the same agent tomorrow — pays the full cost again, and reaches a slightly different conclusion. Understanding is re-derived thousands of times, inconsistently, and never accumulates anywhere.</p>
+    <p>Meanwhile the truth about the system is real, but scattered across places no single retrieval pass reaches: structure lives in the AST, intent lives in git history and closed pull requests, operational reality lives in CI configs and deploy scripts, constraints live in tribal knowledge, and the domain model lives in the head of someone who left in 2019.</p>
+
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 860 336" role="img" aria-label="Two workflows compared. Without a Brain, each session runs task, read files, infer a model, act, then discards everything and the next session starts at zero. With a Brain, the task draws a context pack from the Brain, the agent acts, the result is verified, and findings are written back so understanding accumulates.">
+          <defs>
+            <marker id="a-mut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="a-on" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="var(--stain)"/>
+            </marker>
+          </defs>
+
+          <!-- ROW A -->
+          <text class="svg-t hd" x="30" y="26">WITHOUT A BRAIN</text>
+          <rect class="svg-box" x="30"  y="46" width="86"  height="42" rx="2"/>
+          <text class="svg-t" x="73"  y="72" text-anchor="middle">Task</text>
+          <rect class="svg-box" x="162" y="46" width="140" height="42" rx="2"/>
+          <text class="svg-t" x="232" y="72" text-anchor="middle">Grep &amp; read files</text>
+          <rect class="svg-box" x="348" y="46" width="118" height="42" rx="2"/>
+          <text class="svg-t" x="407" y="72" text-anchor="middle">Infer a model</text>
+          <rect class="svg-box" x="512" y="46" width="86"  height="42" rx="2"/>
+          <text class="svg-t" x="555" y="72" text-anchor="middle">Act</text>
+          <rect class="svg-box" x="644" y="46" width="172" height="42" rx="2" stroke-dasharray="4 3"/>
+          <text class="svg-t sm" x="730" y="71" text-anchor="middle">context evaporates</text>
+
+          <line class="svg-l" x1="116" y1="67" x2="156" y2="67" marker-end="url(#a-mut)"/>
+          <line class="svg-l" x1="302" y1="67" x2="342" y2="67" marker-end="url(#a-mut)"/>
+          <line class="svg-l" x1="466" y1="67" x2="506" y2="67" marker-end="url(#a-mut)"/>
+          <line class="svg-l" x1="598" y1="67" x2="638" y2="67" marker-end="url(#a-mut)"/>
+
+          <path class="svg-l" d="M730 88 L730 120 L73 120 L73 94" stroke-dasharray="5 4" marker-end="url(#a-mut)"/>
+          <text class="svg-t sm" x="401" y="136" text-anchor="middle">every session restarts at zero</text>
+
+          <line class="svg-l" x1="30" y1="166" x2="830" y2="166"/>
+
+          <!-- ROW B -->
+          <text class="svg-t hd" x="30" y="200">WITH A BRAIN</text>
+          <rect class="svg-box" x="30"  y="220" width="86"  height="42" rx="2"/>
+          <text class="svg-t" x="73"  y="246" text-anchor="middle">Task</text>
+          <rect class="svg-key" x="162" y="220" width="140" height="42" rx="2"/>
+          <text class="svg-t on" x="232" y="240" text-anchor="middle">Brain</text>
+          <text class="svg-t sm on" x="232" y="255" text-anchor="middle">→ context pack</text>
+          <rect class="svg-box" x="348" y="220" width="118" height="42" rx="2"/>
+          <text class="svg-t" x="407" y="246" text-anchor="middle">Act</text>
+          <rect class="svg-box" x="512" y="220" width="86"  height="42" rx="2"/>
+          <text class="svg-t" x="555" y="246" text-anchor="middle">Verify</text>
+          <rect class="svg-alt" x="644" y="220" width="172" height="42" rx="2"/>
+          <text class="svg-t" x="730" y="246" text-anchor="middle">Outcome + corrections</text>
+
+          <line class="svg-l" x1="116" y1="241" x2="156" y2="241" marker-end="url(#a-mut)"/>
+          <line class="svg-l" x1="302" y1="241" x2="342" y2="241" marker-end="url(#a-mut)"/>
+          <line class="svg-l" x1="466" y1="241" x2="506" y2="241" marker-end="url(#a-mut)"/>
+          <line class="svg-l" x1="598" y1="241" x2="638" y2="241" marker-end="url(#a-mut)"/>
+
+          <path class="svg-l on" d="M730 262 L730 296 L232 296 L232 268" marker-end="url(#a-on)"/>
+          <text class="svg-t sm on" x="481" y="312" text-anchor="middle">understanding accumulates</text>
+        </svg>
+      </div>
+      <figcaption>The only structural difference is the return arrow. In the first loop, work produces code and nothing else; in the second, every session also leaves the system better understood than it found it.</figcaption>
+    </figure>
+  </div>
+</section>
+
+<!-- ================= 02 VISION ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">02</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>What we are building</h2>
+    <p class="thesis">CodeBrain compiles a repository into a Brain — and keeps it true on every commit — so that any agent or engineer starting any lifecycle task begins informed instead of blind.</p>
+    <p>A Brain is not a wiki, and not an embedding index. It is a structured, layered, provenance-carrying model of one software system, stored beside the code, versioned with the code, and reviewed like the code. It is built deterministically where possible, enriched by language models where necessary, and — crucially — <strong>verified by execution</strong> where the claim is executable.</p>
+    <p>Two things come out of it. For humans, an <strong>Atlas</strong>: the onboarding document that is always current because it is generated, not maintained. For agents, a <strong>Context Pack</strong>: a task-scoped, budget-bounded, fully-cited bundle answering the only question that matters at the moment of work — <em>what is the minimum sufficient context to do this correctly?</em></p>
+    <p>The second is the real product. Agents rarely fail because the model is weak; they fail because they were handed the wrong thousand lines. Retrieval quality, not model quality, is what an autonomous software factory runs out of first.</p>
+
+    <h3>Why this, why now</h3>
+    <p>Model capability crossed the threshold where multi-step code change is routine. Context windows grew, but system size grew faster, and relevance degraded — more context is not better context. And the largest market is not greenfield: most software in the world is legacy, and legacy's defining problem is precisely <em>lost understanding</em>. A system that reconstructs and preserves understanding is worth more on a twenty-year-old codebase than on a new one.</p>
+  </div>
+</section>
+
+<!-- ================= 03 PRINCIPLES ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">03</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>Principles</h2>
+    <p class="dek">These are the commitments that decide the arguments later. Each one closes off a tempting shortcut.</p>
+    <div class="prins">
+      <div class="prin"><span class="pn">i</span><span><b>Deterministic first, inference last.</b><span>Anything derivable from the AST, the manifests, the git log, or the CI config is derived that way — free, reproducible, offline, and exact. Language models are used only where meaning genuinely cannot be computed.</span></span></div>
+      <div class="prin"><span class="pn">ii</span><span><b>Provenance or it didn't happen.</b><span>Every node, edge, and claim carries evidence spans, an extraction method, a confidence, and the commit it was true at. An agent can demand only verified facts for a risky refactor. A Brain that confabulates silently is worse than no Brain.</span></span></div>
+      <div class="prin"><span class="pn">iii</span><span><b>Context is the product.</b><span>The graph is substrate. Success is measured by whether a packed context makes an agent finish a task it would otherwise fail — not by node counts or coverage percentages.</span></span></div>
+      <div class="prin"><span class="pn">iv</span><span><b>Claims must be falsifiable.</b><span>"The test command is <code>pytest -q</code>" is a hypothesis until CodeBrain runs it. Executable claims get executed; verified facts are promoted, refuted ones demoted. This is the line between a Brain and documentation.</span></span></div>
+      <div class="prin"><span class="pn">v</span><span><b>The Brain is code.</b><span>It lives in the repo, diffs on pull requests, and gates CI when it drifts from HEAD. Understanding that isn't versioned alongside the thing it describes goes stale by default.</span></span></div>
+      <div class="prin"><span class="pn">vi</span><span><b>Unknowns are first-class.</b><span>A partial Brain beats no Brain. Gaps are recorded as open questions and surfaced in packs, so an agent knows the edge of the map instead of walking off it.</span></span></div>
+      <div class="prin"><span class="pn">vii</span><span><b>Read-write, not read-only.</b><span>Agents contribute back: what they learned, what the Brain got wrong, which constraint bit them. The asset compounds with use.</span></span></div>
+      <div class="prin"><span class="pn">viii</span><span><b>Pluggable, not language-locked.</b><span>Extractors are providers behind a stable schema. New languages, frameworks, and third-party graph tools plug in without touching the core.</span></span></div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 04 LAYERS ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">04</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>Conceptual design — eight layers</h2>
+    <p class="dek">A Brain is a stack. Each layer answers a distinct question an agent actually asks, is sourced differently, and earns a different level of trust. Lower layers are cheap and certain; higher ones are expensive and interpretive.</p>
+
+    <div class="strata">
+      <div class="stratum">
+        <span class="lcode">L0</span>
+        <span><span class="lname">Corpus</span><span class="lq">What is this thing, and what is in it?</span><span class="lsrc">filesystem · manifests · licences · language mix · vendored code</span></span>
+        <span class="pill m-ext">EXTRACTED</span>
+      </div>
+      <div class="stratum">
+        <span class="lcode">L1</span>
+        <span><span class="lname">Structure</span><span class="lq">What exists, and how is it wired together?</span><span class="lsrc">AST · symbols · imports · call graph · type graph · module boundaries</span></span>
+        <span class="pill m-ext">EXTRACTED</span>
+      </div>
+      <div class="stratum">
+        <span class="lcode">L2</span>
+        <span><span class="lname">Behavior</span><span class="lq">What does it actually do when it runs?</span><span class="lsrc">entrypoints · HTTP routes · jobs · queues · DB access · env &amp; config · side effects</span></span>
+        <span class="pill m-der">DERIVED</span>
+      </div>
+      <div class="stratum">
+        <span class="lcode">L3</span>
+        <span><span class="lname">Semantics</span><span class="lq">What does this mean in the business?</span><span class="lsrc">domain entities · bounded contexts · capabilities · business rules · ubiquitous language</span></span>
+        <span class="pill m-inf">INFERRED</span>
+      </div>
+      <div class="stratum">
+        <span class="lcode">L4</span>
+        <span><span class="lname">Intent</span><span class="lq">Why is it like this, and what has it survived?</span><span class="lsrc">git archaeology · churn &amp; hotspots · co-change coupling · ADRs · PR threads · incidents</span></span>
+        <span class="pill m-der">DERIVED</span>
+      </div>
+      <div class="stratum">
+        <span class="lcode">L5</span>
+        <span><span class="lname">Operations</span><span class="lq">How do I build, test, run, and ship it?</span><span class="lsrc">CI pipelines · scripts · containers · IaC · environments · ownership</span></span>
+        <span class="pill m-ext">EXTRACTED</span>
+      </div>
+      <div class="stratum">
+        <span class="lcode">L6</span>
+        <span><span class="lname">Constraints</span><span class="lq">What must I not break, and where is it dangerous?</span><span class="lsrc">invariants · public contracts · test coverage gaps · blast radius · policy &amp; compliance zones</span></span>
+        <span class="pill m-der">DERIVED</span>
+      </div>
+      <div class="stratum">
+        <span class="lcode">L7</span>
+        <span><span class="lname">Memory</span><span class="lq">What have we learned since the last build?</span><span class="lsrc">agent sessions · task outcomes · human corrections · refuted claims · decay</span></span>
+        <span class="pill m-acc">ACCUMULATED</span>
+      </div>
+    </div>
+    <p class="dek">L4 is the layer that makes legacy tractable. Structure tells you a function exists; only history tells you it was rewritten three times, each rewrite followed by an incident, and that two teams both depend on its exact timing. That is the knowledge that leaves with people.</p>
+
+    <h3>The honesty model</h3>
+    <p>Every fact in every layer carries the same envelope, and packs can be filtered on it. This is what makes a Brain safe to hand an autonomous agent.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Field</th><th>Carries</th><th>Used for</th></tr></thead>
+        <tbody>
+          <tr><td>evidence</td><td>file:line spans, commit SHAs, CI log refs</td><td>Agent can re-read the source of any claim</td></tr>
+          <tr><td>method</td><td>EXTRACTED · DERIVED · INFERRED · OBSERVED · ASSERTED</td><td>Trust tiering; "extracted only" mode</td></tr>
+          <tr><td>confidence</td><td>0.0 – 1.0, adjusted by verification</td><td>Ranking inside a context pack</td></tr>
+          <tr><td>as_of</td><td>the commit the claim was established at</td><td>Staleness and drift detection</td></tr>
+          <tr><td>status</td><td>fresh · stale · refuted · unverified</td><td>CI gate; automatic re-extraction</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 05 PACK COMPILER ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">05</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>The context pack compiler</h2>
+    <p class="dek">The centerpiece. Given a task, a token budget, and an agent role, it compiles the smallest bundle of cited facts sufficient to do the job correctly.</p>
+    <p>This is graph traversal with typed expansion and a budget fit — not similarity search over chunks. Embeddings help resolve a fuzzy task description to concrete anchors; everything after that is structural, which is why the result is explainable and reproducible.</p>
+
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 880 404" role="img" aria-label="The context pack compiler. A task with a budget and role resolves to an anchor set of symbols, expands along typed edges into six facets — blast radius, contracts, precedent, constraints, runbook and known unknowns — then is ranked, deduplicated and fitted to the token budget to produce a cited context pack.">
+          <defs>
+            <marker id="p-mut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+            </marker>
+            <marker id="p-on" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6.5" markerHeight="6.5" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="var(--stain)"/>
+            </marker>
+          </defs>
+
+          <text class="svg-t hd" x="16"  y="18">INPUT</text>
+          <text class="svg-t hd" x="192" y="18">ANCHOR</text>
+          <text class="svg-t hd" x="378" y="18">TYPED EXPANSION OVER THE BRAIN</text>
+          <text class="svg-t hd" x="656" y="18">FIT</text>
+          <text class="svg-t hd" x="786" y="18">OUTPUT</text>
+
+          <!-- input -->
+          <rect class="svg-box" x="16" y="164" width="132" height="76" rx="2"/>
+          <text class="svg-t" x="82" y="190" text-anchor="middle">Task statement</text>
+          <text class="svg-t sm" x="82" y="208" text-anchor="middle">token budget</text>
+          <text class="svg-t sm" x="82" y="224" text-anchor="middle">agent role</text>
+
+          <line class="svg-l" x1="148" y1="202" x2="186" y2="202" marker-end="url(#p-mut)"/>
+
+          <!-- anchors -->
+          <rect class="svg-key" x="186" y="164" width="140" height="76" rx="2"/>
+          <text class="svg-t on" x="256" y="192" text-anchor="middle">Resolve anchors</text>
+          <text class="svg-t sm" x="256" y="212" text-anchor="middle">the symbols the</text>
+          <text class="svg-t sm" x="256" y="227" text-anchor="middle">work actually touches</text>
+
+          <!-- facets -->
+          <rect class="svg-box" x="378" y="30"  width="196" height="42" rx="2"/>
+          <text class="svg-t" x="476" y="50" text-anchor="middle">Blast radius</text>
+          <text class="svg-t sm" x="476" y="64" text-anchor="middle">everything that depends on it</text>
+
+          <rect class="svg-box" x="378" y="88"  width="196" height="42" rx="2"/>
+          <text class="svg-t" x="476" y="108" text-anchor="middle">Contracts &amp; schemas</text>
+          <text class="svg-t sm" x="476" y="122" text-anchor="middle">what may not change shape</text>
+
+          <rect class="svg-box" x="378" y="146" width="196" height="42" rx="2"/>
+          <text class="svg-t" x="476" y="166" text-anchor="middle">Precedent</text>
+          <text class="svg-t sm" x="476" y="180" text-anchor="middle">how this was done here before</text>
+
+          <rect class="svg-box" x="378" y="204" width="196" height="42" rx="2"/>
+          <text class="svg-t" x="476" y="224" text-anchor="middle">Constraints &amp; owners</text>
+          <text class="svg-t sm" x="476" y="238" text-anchor="middle">invariants, danger zones</text>
+
+          <rect class="svg-box" x="378" y="262" width="196" height="42" rx="2"/>
+          <text class="svg-t" x="476" y="282" text-anchor="middle">Runbook</text>
+          <text class="svg-t sm" x="476" y="296" text-anchor="middle">exact build / test / verify</text>
+
+          <rect class="svg-box" x="378" y="320" width="196" height="42" rx="2" stroke-dasharray="4 3"/>
+          <text class="svg-t" x="476" y="340" text-anchor="middle">Known unknowns</text>
+          <text class="svg-t sm" x="476" y="354" text-anchor="middle">the edge of the map</text>
+
+          <!-- fan out -->
+          <line class="svg-l" x1="326" y1="196" x2="372" y2="51"  marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="326" y1="198" x2="372" y2="109" marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="326" y1="200" x2="372" y2="167" marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="326" y1="204" x2="372" y2="225" marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="326" y1="206" x2="372" y2="283" marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="326" y1="208" x2="372" y2="341" marker-end="url(#p-mut)"/>
+
+          <!-- converge -->
+          <line class="svg-l" x1="574" y1="51"  x2="644" y2="196" marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="574" y1="109" x2="644" y2="198" marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="574" y1="167" x2="644" y2="200" marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="574" y1="225" x2="644" y2="204" marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="574" y1="283" x2="644" y2="206" marker-end="url(#p-mut)"/>
+          <line class="svg-l" x1="574" y1="341" x2="644" y2="208" marker-end="url(#p-mut)"/>
+
+          <!-- fit -->
+          <rect class="svg-box" x="648" y="164" width="120" height="76" rx="2"/>
+          <text class="svg-t" x="708" y="188" text-anchor="middle">Rank · dedupe</text>
+          <text class="svg-t" x="708" y="206" text-anchor="middle">fit to budget</text>
+          <text class="svg-t sm" x="708" y="224" text-anchor="middle">drop low confidence</text>
+
+          <line class="svg-l on" x1="768" y1="202" x2="806" y2="202" marker-end="url(#p-on)"/>
+
+          <!-- output -->
+          <rect class="svg-key" x="806" y="164" width="62" height="76" rx="2"/>
+          <text class="svg-t on" x="837" y="192" text-anchor="middle">Context</text>
+          <text class="svg-t on" x="837" y="208" text-anchor="middle">Pack</text>
+          <text class="svg-t sm on" x="837" y="226" text-anchor="middle">cited</text>
+        </svg>
+      </div>
+      <figcaption>Six facets, because six different kinds of ignorance cause six different failures: touching too little (blast radius), breaking callers (contracts), inventing a new pattern (precedent), violating an invariant (constraints), being unable to check the work (runbook), and confidently guessing (unknowns).</figcaption>
+    </figure>
+
+    <h3>Three surfaces</h3>
+    <p>The same Brain is reached three ways. An <strong>MCP server</strong> for agents, exposing <code>locate</code>, <code>explain</code>, <code>impact</code>, <code>contract</code>, <code>precedent</code>, <code>runbook</code>, <code>pack</code>, and the write-back tools <code>assert</code> and <code>question</code>. A <strong>CLI</strong> for humans and CI. And the generated <strong>Atlas</strong> — Markdown and HTML — for review, onboarding, and the moment a human needs to audit what the machine believes.</p>
+  </div>
+</section>
+
+<!-- ================= 06 LIFECYCLE ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">06</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>A Brain is alive</h2>
+    <p class="dek">A snapshot rots within a week. The operating model is a loop that runs on every commit and every agent session.</p>
+
+    <figure>
+      <div class="scroll">
+        <svg viewBox="0 0 560 400" role="img" aria-label="The Brain maintenance cycle. A one-time cold build creates the Brain at the centre. Then three stations run continuously in a clockwise ring: sync re-extracts only changed files on each commit, verify executes falsifiable claims to promote or demote confidence, and learn absorbs corrections from agent sessions.">
+          <defs>
+            <marker id="c-on" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="var(--stain)"/>
+            </marker>
+            <marker id="c-mut" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+              <path d="M0 0 L10 5 L0 10 z" fill="currentColor"/>
+            </marker>
+          </defs>
+
+          <!-- cold build enters once -->
+          <rect class="svg-box" x="14" y="26" width="128" height="40" rx="2" stroke-dasharray="4 3"/>
+          <text class="svg-t" x="78" y="51" text-anchor="middle">Cold build</text>
+          <path class="svg-l" d="M142 52 C210 60 220 130 236 168" stroke-dasharray="4 3" marker-end="url(#c-mut)"/>
+          <text class="svg-t sm" x="176" y="104">once</text>
+
+          <!-- centre -->
+          <rect class="svg-key" x="212" y="172" width="136" height="60" rx="2"/>
+          <text class="svg-t on" x="280" y="197" text-anchor="middle">BRAIN</text>
+          <text class="svg-t sm on" x="280" y="215" text-anchor="middle">versioned in-repo</text>
+
+          <!-- stations -->
+          <rect class="svg-box" x="206" y="48" width="148" height="44" rx="2"/>
+          <text class="svg-t" x="280" y="68" text-anchor="middle">Sync</text>
+          <text class="svg-t sm" x="280" y="83" text-anchor="middle">changed files only</text>
+
+          <rect class="svg-box" x="378" y="298" width="164" height="44" rx="2"/>
+          <text class="svg-t" x="460" y="318" text-anchor="middle">Verify</text>
+          <text class="svg-t sm" x="460" y="333" text-anchor="middle">execute the claims</text>
+
+          <rect class="svg-box" x="20" y="298" width="164" height="44" rx="2"/>
+          <text class="svg-t" x="102" y="318" text-anchor="middle">Learn</text>
+          <text class="svg-t sm" x="102" y="333" text-anchor="middle">agent write-back</text>
+
+          <!-- ring, clockwise -->
+          <path class="svg-l on" d="M358 76 C452 96 502 190 494 292" marker-end="url(#c-on)"/>
+          <text class="svg-t sm on" x="444" y="150">re-extracted</text>
+          <text class="svg-t sm on" x="444" y="164">facts</text>
+
+          <path class="svg-l on" d="M378 344 C316 372 236 372 178 346" marker-end="url(#c-on)"/>
+          <text class="svg-t sm on" x="278" y="388" text-anchor="middle">confidence promoted or demoted</text>
+
+          <path class="svg-l on" d="M62 292 C56 190 108 96 202 76" marker-end="url(#c-on)"/>
+          <text class="svg-t sm on" x="46" y="150">corrections</text>
+          <text class="svg-t sm on" x="46" y="164">&amp; new facts</text>
+
+          <!-- drift gate -->
+          <line class="svg-l" x1="280" y1="232" x2="280" y2="286" marker-end="url(#c-mut)"/>
+          <text class="svg-t sm" x="288" y="264">drift gate → CI</text>
+        </svg>
+      </div>
+      <figcaption>Sync keeps the Brain current cheaply; verify keeps it honest; learn makes it compound. The drift gate is what stops a stale Brain from quietly poisoning every agent downstream — CI fails when HEAD and the Brain disagree.</figcaption>
+    </figure>
+
+    <h3>Serving the lifecycle</h3>
+    <p>Each stage of the software lifecycle reads specific layers and writes specific facts back. That two-way traffic is the whole design.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Stage</th><th>Reads</th><th>Writes back</th></tr></thead>
+        <tbody>
+          <tr><td>Understand</td><td>Atlas, L1 structure, L3 semantics, L4 intent</td><td>Open questions, gaps found</td></tr>
+          <tr><td>Plan</td><td>Pack: blast radius, contracts, precedent</td><td>Proposed change set, risk estimate</td></tr>
+          <tr><td>Implement</td><td>Pack: constraints, conventions, owners</td><td>New symbols, edges, decisions taken</td></tr>
+          <tr><td>Test</td><td>L5 runbook, L6 coverage gaps</td><td>Observed commands, verified claims</td></tr>
+          <tr><td>Review</td><td>Impact diff, invariant checks, Brain diff</td><td>Human corrections, asserted facts</td></tr>
+          <tr><td>Ship</td><td>L5 pipelines, environments, rollout paths</td><td>Deploy topology, real dependencies</td></tr>
+          <tr><td>Operate</td><td>L2 behavior, L6 danger zones, ownership</td><td>Incidents, hotspots, runtime truth</td></tr>
+          <tr><td>Learn</td><td>L7 memory, outcome history</td><td>Refuted claims, refined confidence</td></tr>
+        </tbody>
+      </table>
+    </div>
+
+    <h3>From repo to system: the Cortex</h3>
+    <p>One Brain models one repository. Real organizations are systems of systems, so Brains federate into a <strong>Cortex</strong>: a higher-order index over many Brains that resolves cross-repo contracts, builds the true service graph from both code and traffic, carries org-wide policy, and answers questions no single repository can — <em>which twelve services break if this field changes type?</em> A Cortex is composed, never re-extracted; each Brain stays authoritative for its own repo.</p>
+  </div>
+</section>
+
+<!-- ================= 07 CLAUDE CODE ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">07</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>Living inside an agent harness</h2>
+    <p class="dek">Claude Code is the reference integration, and the sharpest test of the design: if a Brain cannot make a real coding agent measurably better inside a real harness, nothing else here matters.</p>
+    <p>CodeBrain ships as a CLI plus an MCP server and attaches through four seams. The important one is not the tool surface — it is the hooks, because they place the right context into the session <em>without the model having to decide to ask for it</em>. A tool that must be chosen will sometimes not be chosen.</p>
+
+    <h3>What lands in the repository</h3>
+    <pre class="term"><b>.brain/</b>                    <u># the Brain — committed, diffed, reviewed</u>
+  manifest.json          <u># schema version, as_of commit, build config</u>
+  layers/                <u># l0_corpus … l7_memory, JSONL, sorted, line-diffable</u>
+  claims.db              <u># derived index, gitignored, rebuilt from layers/</u>
+  ATLAS.md               <u># human-readable, generated</u>
+<b>.mcp.json</b>                  <u># exposes the Brain as an MCP server</u>
+<b>.claude/settings.json</b>       <u># the five hooks</u>
+<b>CLAUDE.md</b>                  <u># generated stanza: invariants + consult-the-Brain-first</u></pre>
+
+    <h3>The five hooks</h3>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Hook</th><th>Command</th><th>What it does</th></tr></thead>
+        <tbody>
+          <tr><td>SessionStart</td><td><code>codebrain brief</code></td><td>Injects a ~400-token orientation: what this repo is, its modules, current branch, which regions are stale</td></tr>
+          <tr><td>UserPromptSubmit</td><td><code>codebrain pack</code></td><td>Reads the task off stdin, compiles a scoped pack, prints it into context — the agent is informed before its first action</td></tr>
+          <tr><td>PreToolUse</td><td><code>codebrain guard</code></td><td>Checks the pending edit against L6 constraints; can deny with a reason, or warn on hotspots and frozen zones</td></tr>
+          <tr><td>PostToolUse</td><td><code>codebrain touch</code></td><td>Marks the edited neighborhood stale so the next pack does not serve outdated facts</td></tr>
+          <tr><td>Stop</td><td><code>codebrain learn</code></td><td>Harvests the session into L7 and triggers an incremental sync</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <p>Alongside them, an <strong>MCP server</strong> exposes <code>brain_locate</code>, <code>brain_explain</code>, <code>brain_impact</code>, <code>brain_contract</code>, <code>brain_precedent</code>, <code>brain_runbook</code>, <code>brain_pack</code>, and the write-back pair <code>brain_assert</code> and <code>brain_question</code> — for the mid-task moment when the agent realises it needs more. A generated <strong>CLAUDE.md</strong> stanza carries policy and the repo's hard invariants, kept deliberately short because the hooks carry the volume. A <code>/brain</code> skill is the human entry point.</p>
+
+    <h3>One session, concretely</h3>
+    <p>Task: <em>add rate limiting to the payments API</em>. Without a Brain, the agent greps for "rate limit", finds nothing, greps for "middleware", opens eight files, spends roughly 25k tokens rebuilding the request path — and never discovers that a house-standard <code>RateLimiter</code> already exists in a shared package. With a Brain, the prompt hook fires first:</p>
+    <pre class="term"><b>CONTEXT PACK</b> · task: add rate limiting to the payments API · 5.8k/6k tokens
+
+<b>ANCHORS</b>       payments/api.py:44 charge_endpoint · payments/middleware.py:12 chain
+<b>BLAST RADIUS</b>  4 internal callers; POST /v1/charges has 4 external consumers   <i>[EXTRACTED]</i>
+<b>CONTRACTS</b>     openapi.yaml#/paths/~1v1~1charges — response shape frozen       <i>[EXTRACTED]</i>
+<b>PRECEDENT</b>     throttle added to /v1/refunds in a1c93f2 (Mar 2026) using
+              packages/shared/throttle.py:RateLimiter — the house pattern    <i>[DERIVED 0.86]</i>
+<b>CONSTRAINTS</b>   payments/settle.py is PCI-scoped, CODEOWNERS @risk-eng — frozen <i>[ASSERTED]</i>
+              payments/api.py: 31 commits/90d, 3 followed by incidents       <i>[DERIVED]</i>
+<b>RUNBOOK</b>       make test-payments                          <i>[OBSERVED, verified 9f21ab, 41s]</i>
+<b>UNKNOWNS</b>      Redis vs in-process limiter store — not statically determinable</pre>
+    <p>The agent then uses the house pattern instead of inventing one; is <em>denied</em> by <code>guard</code> when it wanders into PCI-scoped <code>settle.py</code>, and routes around rather than silently editing frozen code; verifies with the real test command rather than guessing between <code>pytest</code> and <code>make</code>. On stop, <code>learn</code> records the new symbols, confirms the runbook claim and raises its confidence, and resolves the Redis unknown — so the next agent never rediscovers it.</p>
+
+    <h3>Two rules this integration must not break</h3>
+    <p><strong>Every hook fails open.</strong> If <code>.brain/</code> is missing, stale, or the binary errors, hooks print nothing and the harness behaves exactly as it does today. A Brain that can break someone's session gets uninstalled the first time it does — so degradation is a hard requirement, not a nicety.</p>
+    <p><strong>The cold build is the only slow moment.</strong> First extraction on a large legacy monorepo is where adoption is won or lost; everything after is incremental. That is why P1's sixty-second target is a gate and not a vanity number.</p>
+  </div>
+</section>
+
+<!-- ================= 08 ROADMAP ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">08</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>Roadmap</h2>
+    <p class="dek">Sequenced so that each phase ships something usable on its own, and so the deterministic, verifiable core exists before any dependency on language-model output. Durations assume a small focused team.</p>
+
+    <div class="phase">
+      <span class="pcode">P0<span class="pspan">2 weeks</span></span>
+      <div>
+        <h3>Schema and skeleton</h3>
+        <p>The Brain data model, the provenance envelope, on-disk format and store, CLI shell, and the plugin contract for extractors. Nothing clever — but everything downstream conforms to it, so getting the envelope right is the whole job.</p>
+        <div class="gate"><b>Done when</b>A Brain can be written, read, merged and diffed, and two dummy extractors coexist behind the provider interface.</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <span class="pcode">P1<span class="pspan">4 weeks</span></span>
+      <div>
+        <h3>Deterministic core — L0, L1, L4, L5</h3>
+        <p>Corpus detection; structural extraction for Python, TypeScript and JavaScript; operations discovery from CI configs, manifests and scripts; git archaeology producing churn, hotspots, co-change coupling and ownership. The Atlas generator. All offline, no API key, fully reproducible.</p>
+        <div class="gate"><b>Done when</b><code>codebrain build</code> on a 100k-LOC repo finishes under 60 seconds offline and produces an Atlas a new engineer can genuinely onboard from.</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <span class="pcode">P2<span class="pspan">4 weeks</span></span>
+      <div>
+        <h3>Context packs and MCP — first agent value</h3>
+        <p>Anchor resolution, typed expansion, blast-radius computation, budget knapsack, and the MCP server exposing the tool surface. The evaluation harness starts here and runs permanently from now on.</p>
+        <div class="gate"><b>Done when</b>On a held-out task set, an agent given only a pack beats the same agent with plain search on task success rate and tokens-to-solution — measured, not asserted.</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <span class="pcode">P3<span class="pspan">4 weeks</span></span>
+      <div>
+        <h3>Verification and drift — the moat</h3>
+        <p>Executable claims, sandboxed runbook verification, promotion and demotion of confidence, incremental <code>sync</code>, staleness tracking, and the CI drift gate. This is where CodeBrain stops being a document generator.</p>
+        <div class="gate"><b>Done when</b><code>codebrain verify</code> promotes verified claims and demotes refuted ones automatically, and CI fails a pull request whose Brain has drifted from HEAD.</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <span class="pcode">P4<span class="pspan">4 weeks</span></span>
+      <div>
+        <h3>Semantics, behavior and constraints — L2, L3, L6</h3>
+        <p>Runtime surface mapping — entrypoints, routes, jobs, data access, config. Language-model passes for the domain model, bounded contexts and ubiquitous language, every claim cited. ADR and pull-request mining for narrative intent. Constraints derived from invariants, coverage gaps and hotspot overlap.</p>
+        <div class="gate"><b>Done when</b>The Brain answers "why does this exist and what breaks if I change it" with citations a reviewer can check in under a minute.</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <span class="pcode">P5<span class="pspan">4 weeks</span></span>
+      <div>
+        <h3>Memory and write-back — L7</h3>
+        <p>Session ingestion, human corrections, refuted-claim tracking, confidence decay, and conflict resolution when agents disagree with the Brain or each other.</p>
+        <div class="gate"><b>Done when</b>A second agent measurably outperforms the first on a related task purely because of what the first wrote back.</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <span class="pcode">P6<span class="pspan">6 weeks</span></span>
+      <div>
+        <h3>Cortex — systems of systems</h3>
+        <p>Federation across Brains, cross-repo contract resolution, the composed service graph, org-wide policy and constraint inheritance, and cross-repo impact analysis.</p>
+        <div class="gate"><b>Done when</b>A field type change in one repository correctly enumerates its consumers in every other repository in the Cortex.</div>
+      </div>
+    </div>
+
+    <div class="phase">
+      <span class="pcode">P7<span class="pspan">ongoing</span></span>
+      <div>
+        <h3>Platform</h3>
+        <p>Hosted Brains, team dashboards, policy administration, more languages, and a third-party extractor ecosystem. Only worth starting once P2 and P3 have proven the value is real.</p>
+        <div class="gate"><b>Done when</b>Teams outside the founding one keep their Brains green without being asked to.</div>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 09 MEASUREMENT ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">09</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>How we will know it works</h2>
+    <p class="dek">"The graph has 40,000 nodes" is not evidence of anything. From P2 onward, every change is judged against a held-out task set on these numbers.</p>
+    <div class="scroll">
+      <table>
+        <thead><tr><th>Metric</th><th>Definition</th><th>Direction</th></tr></thead>
+        <tbody>
+          <tr><td>Task success rate</td><td>Tasks completed correctly, with vs. without a pack</td><td class="num">↑ primary</td></tr>
+          <tr><td>Tokens to solution</td><td>Total tokens consumed reaching a correct result</td><td class="num">↓</td></tr>
+          <tr><td>Wrong-file rate</td><td>Edits made outside the true change set</td><td class="num">↓</td></tr>
+          <tr><td>Regression escape rate</td><td>Agent changes that break something elsewhere</td><td class="num">↓ critical</td></tr>
+          <tr><td>Claim precision</td><td>Share of Brain claims that survive verification</td><td class="num">↑</td></tr>
+          <tr><td>Cold-start time</td><td>Wall clock for a full build per 100k LOC</td><td class="num">↓</td></tr>
+          <tr><td>Staleness half-life</td><td>Commits before a Brain measurably drifts</td><td class="num">↑</td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<!-- ================= 10 RISKS ================= -->
+<section class="sec">
+  <div class="mark"><span class="num">10</span><span class="tick"></span></div>
+  <div class="body">
+    <h2>What could kill this</h2>
+    <div>
+      <div class="risk">
+        <b>Over-trust in a wrong Brain</b>
+        <p>The worst failure mode by far. A confidently wrong fact scales its damage across every agent that reads it — far more harmful than a gap.</p>
+        <p class="mit"><em>Mitigation</em>Provenance on every claim, verification by execution, refutation tracking, and packs that surface unknowns rather than hiding them.</p>
+      </div>
+      <div class="risk">
+        <b>Staleness</b>
+        <p>A Brain that lags HEAD becomes actively misleading within days on an active repository.</p>
+        <p class="mit"><em>Mitigation</em>Incremental sync on every commit, drift as a CI gate, and staleness carried in the envelope so consumers can discount it.</p>
+      </div>
+      <div class="risk">
+        <b>Extraction fidelity across languages</b>
+        <p>Dynamic dispatch, reflection, code generation, DI containers and macros defeat static analysis — precisely the patterns legacy enterprise code is built from.</p>
+        <p class="mit"><em>Mitigation</em>Runtime observation as a first-class source (OBSERVED facts), explicit low-confidence marking, and honest coverage reporting per language.</p>
+      </div>
+      <div class="risk">
+        <b>Cost at scale</b>
+        <p>If every build needs a large language-model pass over the whole repository, the economics fail on exactly the monorepos that need this most.</p>
+        <p class="mit"><em>Mitigation</em>Deterministic-first by design; inference confined to L3 and narrative L4, incremental, cached, and re-run only for changed neighborhoods.</p>
+      </div>
+      <div class="risk">
+        <b>Scope creep into an IDE, a platform, or a graph database</b>
+        <p>The concept is broad enough to justify building almost anything, which is how this ends up as a demo with nine half-layers.</p>
+        <p class="mit"><em>Mitigation</em>P1 must stand alone as a useful offline tool; nothing in P4 or later starts until P2 and P3 have measured a real lift.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <span>CodeBrain · blueprint v0.1</span>
+  <span>Next: P0 schema</span>
+  <span>Repos hold code — Brains hold understanding</span>
+</footer>
+
+</div>
