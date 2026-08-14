@@ -31,6 +31,7 @@ GITIGNORE = """\
 claims.db
 packs/
 *.tmp
+.touched
 """
 
 
@@ -111,6 +112,53 @@ def load(root: Path | str = BRAIN_DIR) -> Brain:
 
 def exists(root: Path | str = BRAIN_DIR) -> bool:
     return (Path(root) / MANIFEST).is_file()
+
+
+TOUCHED = ".touched"
+
+
+def record_touch(root: Path | str, paths: Iterable[str]) -> int:
+    """Note that a path was edited, without rewriting the Brain.
+
+    The PostToolUse hook runs after every edit while the user waits, so it must
+    be O(1). Rewriting a 200k-record Brain to flip a status flag would make the
+    hook the slowest thing in the session. Instead the path is appended here and
+    consumers treat it as stale at read time; `build` clears the list.
+    """
+    root = Path(root)
+    if not root.is_dir():
+        return 0
+    written = 0
+    with (root / TOUCHED).open("a", encoding="utf-8", newline="\n") as fh:
+        for path in paths:
+            cleaned = path.replace("\\", "/").strip()
+            if cleaned:
+                fh.write(cleaned + "\n")
+                written += 1
+    return written
+
+
+def read_touched(root: Path | str) -> set[str]:
+    path = Path(root) / TOUCHED
+    if not path.is_file():
+        return set()
+    try:
+        return {ln.strip() for ln in path.read_text(encoding="utf-8").splitlines()
+                if ln.strip()}
+    except OSError:
+        return set()
+
+
+def clear_touched(root: Path | str) -> None:
+    (Path(root) / TOUCHED).unlink(missing_ok=True)
+
+
+def apply_touched(brain: Brain, touched: Iterable[str]) -> int:
+    """Mark records whose evidence lives under a touched path as stale."""
+    marked = 0
+    for prefix in touched:
+        marked += brain.touch(prefix, reason="edited since the last build")
+    return marked
 
 
 def append_memory(root: Path | str, records: Iterable[Record]) -> int:

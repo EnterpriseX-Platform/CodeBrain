@@ -12,6 +12,15 @@ TypeScript/JavaScript (L1).
 
 from __future__ import annotations
 
-from . import census, gitmeta, history, operations, structure_py, structure_ts
+from . import (
+    census,
+    constraints,
+    gitmeta,
+    history,
+    operations,
+    structure_py,
+    structure_ts,
+)
 
-__all__ = ["census", "gitmeta", "history", "operations", "structure_py", "structure_ts"]
+__all__ = ["census", "constraints", "gitmeta", "history", "operations",
+           "structure_py", "structure_ts"]

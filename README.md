@@ -20,26 +20,47 @@ begins informed instead of blind.
 
 ## Status
 
-**P1 — the deterministic core.** Complete. CodeBrain now builds a real Brain
-from a real repository, entirely offline, with no API key: structure from the
-Python AST and a TS/JS scanner, operations from manifests and CI, intent from
-git archaeology, and a generated Atlas. Context packs and the MCP server — the
-first agent-facing value — land in P2.
+**P2 — context packs and MCP.** Complete. A Brain now answers the only question
+that matters at the moment of work: *what is the minimum sufficient context for
+this task?* Agents reach it through an MCP server and five hooks; humans through
+the CLI.
 
 | Phase | Scope | State |
 |-------|-------|-------|
 | **P0** | Schema, provenance envelope, store, diff, plugin contract | ✅ done |
 | **P1** | Deterministic core — L0/L1/L4/L5 extractors, Atlas | ✅ done |
-| P2 | Context packs + MCP server — first agent value | next |
-| P3 | Verification by execution, drift gate | |
-| P4 | Semantics, behavior, constraints | |
+| **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ✅ done |
+| P3 | Verification by execution, drift gate | next |
+| P4 | Semantics and behavior — L2/L3, full L6 | |
 | P5 | Memory and agent write-back | |
 | P6 | Cortex — federation across repos | |
 
-**Cold build performance.** 331,000 lines of Python (the CPython standard
-library) → 234,268 records in **24.5s**, about 7.4s per 100k LOC. The P1 gate
-was 60s per 100k; the cold build is where adoption is won or lost, so it is
-measured, not assumed.
+### Measured, not asserted
+
+**Cold build.** 331,000 lines of Python (the CPython standard library) →
+234,268 records in **24.5s**, about 7.4s per 100k LOC against a 60s gate.
+
+**Retrieval.** `codebrain eval` generates its own benchmark from git history:
+each past commit is a task whose correct answer is the files it changed. Context
+packs are compared against keyword search over the same repository, at identical
+k.
+
+| Repository | Files | Pack recall@k | Search recall@k | Delta |
+|---|---:|---:|---:|---:|
+| django | 2,928 `.py` | **35.5%** | 28.2% | **+7.3%** |
+| requests | 37 `.py` | 80.5% | 84.2% | −3.7% |
+
+The pack wins where retrieval is hard and loses on a small flat repository —
+which is the honest result, not a flattering one. On 37 source files, keyword
+search can name a large share of the whole codebase at k, so recall@k barely
+discriminates; the metric runs out of headroom before the method does. Both
+numbers are reported because reporting only django would be a lie of omission.
+
+Run it yourself:
+
+```bash
+codebrain eval --cases 60 --verbose
+```
 
 ---
 
@@ -102,11 +123,59 @@ codebrain diff old-brain new-brain --check   # the seed of the CI drift gate
 | `structure-py` | L1 | Python AST | modules, symbols, imports, resolved call graph |
 | `structure-ts` | L1 | TS/JS scanner | modules, declarations, import graph |
 | `operations` | L5 | manifests, Make, CI, Docker | build/test/run commands, pipelines, CODEOWNERS |
+| `constraints` | L6 | the Brain itself | required reviewers, danger zones, bus-factor risk |
 
 Two extractors overlap on purpose. `census` guesses the repo name from the
 directory (`DERIVED` 0.5); `gitmeta` reads it from the remote (`EXTRACTED`
 0.98). The envelope settles it — a real disagreement resolved by evidence
 quality rather than by whichever provider ran last.
+
+## Using it from an agent
+
+```bash
+codebrain pack "add rate limiting to the payments API"
+```
+
+```
+CONTEXT PACK · task: add rate limiting to the payments API · 1653/6000 tokens · brain @f8ed2b1b
+
+ANCHORS       payments/api.py:44  charge_endpoint (function)
+BLAST RADIUS  payments/middleware.py:12  chain  (direct) [EXTRACTED]
+              + 43 test symbol(s) across 4 test file(s) also depend on this
+CONTRACTS     payments/api.py:44  charge_endpoint — 4 external caller(s)
+PRECEDENT     payments/settle.py changes with payments/api.py (7 shared commits, 70%)
+CONSTRAINTS   payments/api.py needs review from @risk-eng [DERIVED 0.80]
+RUNBOOK       test   make test  [DERIVED 0.80]  (never executed)
+UNKNOWNS      TS/JS has no call graph — blast radius across TS call sites is incomplete
+```
+
+Six facets, because six kinds of ignorance cause six kinds of failure: touching
+the wrong code, breaking callers you did not know existed, changing a shape
+someone depends on, inventing a pattern the repo already has, violating a
+constraint, being unable to check your own work, and guessing confidently.
+
+### Claude Code
+
+`.mcp.json` exposes the Brain as an MCP server with `brain_pack`,
+`brain_locate`, `brain_explain`, `brain_impact`, `brain_runbook` and
+`brain_constraints`. Five hooks push context in without the model having to ask:
+
+| Hook | Command | Does |
+|---|---|---|
+| SessionStart | `codebrain brief` | ~400-token orientation |
+| UserPromptSubmit | `codebrain pack --stdin` | compiles a pack from the task, before the first action |
+| PreToolUse | `codebrain guard` | checks the pending edit against L6 |
+| PostToolUse | `codebrain touch` | marks the edited neighbourhood stale |
+| Stop | `codebrain learn` | *(P5)* |
+
+**Every hook fails open.** If `.brain/` is missing, stale or corrupt, hooks print
+nothing, exit 0, and the session behaves exactly as it would without CodeBrain.
+A Brain that can break someone's session gets uninstalled the first time it
+does — so this is a tested contract, not an aspiration.
+
+`guard` warns by default and never blocks. Denying an edit on inferred evidence
+would get the hook removed; hard gates wait for real compliance zones in P4, and
+are opt-in via `--deny-guarded` until then.
 
 ## The Atlas
 
@@ -204,7 +273,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-149 tests, no external test runner required.
+243 tests, no external test runner required.
 
 ---
 

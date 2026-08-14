@@ -22,9 +22,20 @@ from .atlas import render as render_atlas
 from .diff import diff as diff_brains
 from .diff import render as render_diff
 from .model import LAYER_NAMES, Layer
+from .pack import DEFAULT_BUDGET, brief as render_brief, compile_pack
 from .providers import REGISTRY, BuildContext
 from .providers import build as run_build
-from .store import BRAIN_DIR, BrainNotFound, exists, load, save
+from .store import (
+    BRAIN_DIR,
+    BrainNotFound,
+    apply_touched,
+    clear_touched,
+    exists,
+    load,
+    read_touched,
+    record_touch,
+    save,
+)
 
 # Importing the extractors registers them.
 from . import extractors  # noqa: F401
@@ -110,6 +121,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
     atlas_path = out / "ATLAS.md"
     atlas_path.write_text(render_atlas(result.brain), encoding="utf-8", newline="\n")
+    clear_touched(out)  # everything just re-extracted is fresh again
 
     stats = result.brain.stats()
     print(f"Brain built at {out}")
@@ -207,6 +219,182 @@ def cmd_diff(args: argparse.Namespace) -> int:
     return 1 if (delta.substantive and args.check) else 0
 
 
+# -- agent-facing commands -------------------------------------------------
+#
+# These run inside hooks. Every one of them fails open: if the Brain is missing,
+# stale or corrupt, they print nothing and exit 0, and the session proceeds
+# exactly as it would without CodeBrain installed. A Brain that can break
+# someone's session gets uninstalled the first time it does.
+
+
+def _hook_input() -> dict:
+    """Read the hook payload from stdin. Absent or malformed is not an error."""
+    if sys.stdin is None or sys.stdin.isatty():
+        return {}
+    try:
+        raw = sys.stdin.read()
+    except (OSError, ValueError):
+        return {}
+    if not raw.strip():
+        return {}
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return {}
+    return payload if isinstance(payload, dict) else {}
+
+
+def _load_quietly(brain_dir: str):
+    """Load a Brain with edits-since-build applied, or None."""
+    try:
+        brain = load(brain_dir)
+    except (BrainNotFound, ValueError, OSError):
+        return None
+    try:
+        apply_touched(brain, read_touched(brain_dir))
+    except Exception:  # noqa: BLE001 — staleness is a nicety, never a failure
+        pass
+    return brain
+
+
+def cmd_pack(args: argparse.Namespace) -> int:
+    payload = _hook_input() if args.stdin else {}
+    task = args.task or payload.get("prompt") or ""
+    if not task.strip():
+        return 0
+
+    brain = _load_quietly(args.brain)
+    if brain is None:
+        return 0
+
+    try:
+        pack = compile_pack(brain, task, budget=args.budget,
+                            max_anchors=args.anchors, root=args.root)
+    except Exception:  # noqa: BLE001
+        return 0
+
+    if args.json:
+        print(json.dumps(pack.to_json(), indent=2))
+    elif pack.items or not args.quiet:
+        print(pack.render())
+    return 0
+
+
+def cmd_brief(args: argparse.Namespace) -> int:
+    brain = _load_quietly(args.brain)
+    if brain is None:
+        return 0
+    try:
+        print(render_brief(brain, budget=args.budget))
+    except Exception:  # noqa: BLE001
+        pass
+    return 0
+
+
+def cmd_guard(args: argparse.Namespace) -> int:
+    """PreToolUse: check a pending edit against L6 before it happens."""
+    payload = _hook_input()
+    tool_input = payload.get("tool_input") or {}
+    target = tool_input.get("file_path") or args.path or ""
+    if not target:
+        return 0
+
+    brain = _load_quietly(args.brain)
+    if brain is None:
+        return 0
+
+    rel = str(target).replace("\\", "/")
+    try:
+        root = str(Path(args.root).resolve()).replace("\\", "/")
+        if rel.replace("\\", "/").startswith(root):
+            rel = rel[len(root):].lstrip("/")
+    except OSError:
+        pass
+
+    file_id = f"{Layer.L0}:file:{rel}"
+    reasons: list[str] = []
+    blocking = False
+
+    review = brain.fact(file_id, "requires_review", Layer.L6)
+    if review:
+        owners = " ".join((review.value or {}).get("owners", []))
+        reasons.append(f"{rel} requires review from {owners} (CODEOWNERS)")
+        blocking = True
+
+    danger = brain.fact(file_id, "danger_zone", Layer.L6)
+    if danger:
+        value = danger.value or {}
+        reasons.append(f"{rel} is hotspot #{value.get('rank')} — "
+                       f"{value.get('commits')} commits, {value.get('reason')}")
+
+    bus = brain.fact(file_id, "bus_factor_risk", Layer.L6)
+    if bus:
+        reasons.append(f"{rel} has only ever been changed by "
+                       f"{(bus.value or {}).get('primary_author')}")
+
+    if not reasons:
+        return 0
+
+    # Warn, do not block, unless the operator asked for a hard gate. Denying an
+    # edit on churn alone would be obnoxious and would get the hook removed;
+    # real compliance zones arrive with L6 proper in P4.
+    decision = "ask" if (blocking and args.deny_guarded) else "allow"
+    print(json.dumps({"hookSpecificOutput": {
+        "hookEventName": "PreToolUse",
+        "permissionDecision": decision,
+        "permissionDecisionReason": "CodeBrain: " + "; ".join(reasons),
+    }}))
+    return 0
+
+
+def cmd_touch(args: argparse.Namespace) -> int:
+    """PostToolUse: note an edit so later packs do not serve stale facts."""
+    payload = _hook_input()
+    tool_input = payload.get("tool_input") or {}
+    target = tool_input.get("file_path") or args.path or ""
+    if not target:
+        return 0
+
+    rel = str(target).replace("\\", "/")
+    try:
+        root = str(Path(args.root).resolve()).replace("\\", "/")
+        if rel.startswith(root):
+            rel = rel[len(root):].lstrip("/")
+    except OSError:
+        pass
+    try:
+        record_touch(args.brain, [rel])
+    except OSError:
+        pass
+    return 0
+
+
+def cmd_eval(args: argparse.Namespace) -> int:
+    from .evaluate import evaluate, render as render_eval
+
+    try:
+        brain = load(args.brain)
+    except (BrainNotFound, ValueError) as exc:
+        print(f"codebrain: {exc}", file=sys.stderr)
+        return 2
+
+    report = evaluate(brain, Path(args.root), limit=args.cases, skip=args.skip,
+                      budget=args.budget)
+    print(render_eval(report, verbose=args.verbose))
+    if not report.n:
+        return 0
+    # A pack that does not beat plain search has not earned its place in the
+    # session, so CI can gate on it.
+    delta = report.mean("pack_recall") - report.mean("grep_recall")
+    return 1 if (args.check and delta <= 0) else 0
+
+
+def cmd_serve(args: argparse.Namespace) -> int:
+    from .mcp_server import serve
+
+    return serve(args.brain, root=args.root)
+
+
 def cmd_atlas(args: argparse.Namespace) -> int:
     try:
         brain = load(args.brain)
@@ -240,15 +428,129 @@ def cmd_providers(args: argparse.Namespace) -> int:
     return 0
 
 
+MCP_CONFIG = {"mcpServers": {"codebrain": {"command": "codebrain",
+                                           "args": ["serve", "--mcp"]}}}
+
+HOOKS = {
+    "SessionStart": [{"hooks": [{"type": "command", "command": "codebrain brief"}]}],
+    "UserPromptSubmit": [{"hooks": [{"type": "command",
+                                     "command": "codebrain pack --stdin --quiet"}]}],
+    "PreToolUse": [{"matcher": "Edit|Write|MultiEdit",
+                    "hooks": [{"type": "command", "command": "codebrain guard"}]}],
+    "PostToolUse": [{"matcher": "Edit|Write|MultiEdit",
+                     "hooks": [{"type": "command", "command": "codebrain touch"}]}],
+}
+
+CLAUDE_STANZA = """\
+<!-- codebrain:start -->
+## This repository has a Brain
+
+Before searching the codebase, ask for a context pack — it is cheaper than
+grepping and every line in it is cited:
+
+    codebrain pack "<what you are about to do>"
+
+Claims are tagged `EXTRACTED`, `DERIVED`, `INFERRED`, `OBSERVED` or `ASSERTED`.
+Prefer `EXTRACTED` and `OBSERVED` for risky changes. Treat the `UNKNOWNS`
+section as the edge of what is known, not as nothing to worry about.
+
+`.brain/ATLAS.md` is the generated overview. Do not edit anything under
+`.brain/` by hand — regenerate with `codebrain build`.
+<!-- codebrain:end -->
+"""
+
+
+def _merge_json(path: Path, addition: dict) -> str:
+    """Merge into an existing JSON config without discarding what is there."""
+    if not path.is_file():
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(json.dumps(addition, indent=2) + "\n", encoding="utf-8")
+        return "created"
+    try:
+        current = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, OSError):
+        return "left alone (unreadable)"
+    if not isinstance(current, dict):
+        return "left alone (unexpected shape)"
+
+    changed = False
+    for top, block in addition.items():
+        section = current.setdefault(top, {})
+        if not isinstance(section, dict):
+            continue
+        for key, value in block.items():
+            if key not in section:
+                section[key] = value
+                changed = True
+    if not changed:
+        return "already configured"
+    path.write_text(json.dumps(current, indent=2) + "\n", encoding="utf-8")
+    return "updated"
+
+
+def _merge_hooks(path: Path) -> str:
+    if path.is_file():
+        try:
+            settings = json.loads(path.read_text(encoding="utf-8"))
+        except (json.JSONDecodeError, OSError):
+            return "left alone (unreadable)"
+        if not isinstance(settings, dict):
+            return "left alone (unexpected shape)"
+    else:
+        settings = {}
+        path.parent.mkdir(parents=True, exist_ok=True)
+
+    hooks = settings.setdefault("hooks", {})
+    if not isinstance(hooks, dict):
+        return "left alone (unexpected shape)"
+
+    added = []
+    for event, entries in HOOKS.items():
+        existing = hooks.setdefault(event, [])
+        if not isinstance(existing, list):
+            continue
+        # Never duplicate ours, never touch anyone else's.
+        already = json.dumps(existing)
+        if "codebrain" in already:
+            continue
+        existing.extend(entries)
+        added.append(event)
+
+    if not added:
+        return "already configured"
+    path.write_text(json.dumps(settings, indent=2) + "\n", encoding="utf-8")
+    return f"added {', '.join(added)}"
+
+
 def cmd_init(args: argparse.Namespace) -> int:
     root = Path(args.root)
-    out = root / BRAIN_DIR
-    if exists(out) and not args.force:
-        print(f"codebrain: a Brain already exists at {out} (use --force to rebuild)",
-              file=sys.stderr)
+    if not root.is_dir():
+        print(f"codebrain: not a directory: {root}", file=sys.stderr)
         return 2
+
+    out = root / BRAIN_DIR
     out.mkdir(parents=True, exist_ok=True)
-    print(f"Initialised {out}")
+    print(f"Brain directory   {out}")
+
+    if not args.no_mcp:
+        print(f"MCP server        .mcp.json — {_merge_json(root / '.mcp.json', MCP_CONFIG)}")
+
+    if not args.no_hooks:
+        state = _merge_hooks(root / ".claude" / "settings.json")
+        print(f"Hooks             .claude/settings.json — {state}")
+
+    if not args.no_claude_md:
+        claude_md = root / "CLAUDE.md"
+        current = claude_md.read_text(encoding="utf-8") if claude_md.is_file() else ""
+        if "codebrain:start" in current:
+            state = "already present"
+        else:
+            separator = "\n\n" if current.strip() else ""
+            claude_md.write_text(current + separator + CLAUDE_STANZA, encoding="utf-8")
+            state = "appended" if current.strip() else "created"
+        print(f"Instructions      CLAUDE.md — {state}")
+
+    print()
     print("Next: codebrain build")
     return 0
 
@@ -264,9 +566,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--version", action="version", version=f"codebrain {__version__}")
     sub = parser.add_subparsers(dest="command", required=True)
 
-    p = sub.add_parser("init", help="create an empty .brain/ directory")
+    p = sub.add_parser("init", help="wire CodeBrain into this repository")
     p.add_argument("root", nargs="?", default=".")
-    p.add_argument("--force", action="store_true")
+    p.add_argument("--no-mcp", action="store_true", help="skip .mcp.json")
+    p.add_argument("--no-hooks", action="store_true",
+                   help="skip .claude/settings.json")
+    p.add_argument("--no-claude-md", action="store_true", help="skip CLAUDE.md")
     p.set_defaults(func=cmd_init)
 
     p = sub.add_parser("build", help="run extractors and write the Brain")
@@ -293,6 +598,55 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--check", action="store_true",
                    help="exit non-zero on substantive change (CI drift gate)")
     p.set_defaults(func=cmd_diff)
+
+    p = sub.add_parser("pack", help="compile a context pack for a task")
+    p.add_argument("task", nargs="?", default=None)
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--budget", type=int, default=DEFAULT_BUDGET)
+    p.add_argument("--anchors", type=int, default=8)
+    p.add_argument("--root", default=".")
+    p.add_argument("--stdin", action="store_true",
+                   help="read the task from a hook payload on stdin")
+    p.add_argument("--json", action="store_true")
+    p.add_argument("--quiet", action="store_true",
+                   help="print nothing when no anchors match (hook default)")
+    p.set_defaults(func=cmd_pack)
+
+    p = sub.add_parser("brief", help="session-start orientation")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--budget", type=int, default=500)
+    p.set_defaults(func=cmd_brief)
+
+    p = sub.add_parser("guard", help="check a pending edit against L6 constraints")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--root", default=".")
+    p.add_argument("--path", default=None, help="check this path instead of reading stdin")
+    p.add_argument("--deny-guarded", action="store_true",
+                   help="ask for confirmation on CODEOWNERS-guarded paths")
+    p.set_defaults(func=cmd_guard)
+
+    p = sub.add_parser("touch", help="note that a file was edited")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--root", default=".")
+    p.add_argument("--path", default=None)
+    p.set_defaults(func=cmd_touch)
+
+    p = sub.add_parser("eval", help="measure pack retrieval against keyword search")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--root", default=".")
+    p.add_argument("--cases", type=int, default=40)
+    p.add_argument("--skip", type=int, default=0)
+    p.add_argument("--budget", type=int, default=DEFAULT_BUDGET)
+    p.add_argument("--verbose", action="store_true")
+    p.add_argument("--check", action="store_true",
+                   help="exit non-zero if packs do not beat keyword search")
+    p.set_defaults(func=cmd_eval)
+
+    p = sub.add_parser("serve", help="run the MCP server on stdio")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--root", default=".")
+    p.add_argument("--mcp", action="store_true", help="accepted for symmetry; implied")
+    p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("atlas", help="regenerate the human-readable Atlas")
     p.add_argument("brain", nargs="?", default=BRAIN_DIR)

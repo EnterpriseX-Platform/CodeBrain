@@ -52,6 +52,14 @@ class BuildContext:
     ignore: tuple[str, ...] = DEFAULT_IGNORE
     max_file_bytes: int = 2_000_000
 
+    #: The Brain as it stands so far, set by `build` before providers run.
+    #: Some layers are inherently derivative — L6 constraints are computed from
+    #: L4 ownership and L5 CODEOWNERS, not read from disk — so a late provider
+    #: must be able to see what earlier ones established. Only providers with a
+    #: higher `order` than their inputs may rely on this; anything else is
+    #: reading a half-built Brain and will produce order-dependent output.
+    brain: Any = None
+
     def rel(self, path: Path) -> str:
         """Repo-relative, forward-slashed. Ids must not differ between Windows and CI."""
         try:
@@ -164,8 +172,13 @@ def build(ctx: BuildContext, providers: Iterable[Provider] | None = None) -> Bui
     a partial Brain beats no Brain, and a broken Go extractor must not cost you
     the Python one.
     """
-    chosen = list(providers) if providers is not None else REGISTRY.applicable(ctx)
+    # The Brain must exist before anyone is asked whether they apply: a
+    # derivative provider decides by looking at what is already known, and
+    # asking it against a context with no Brain silently excludes it from the
+    # build entirely.
     brain = new_brain(repo=ctx.repo, as_of=ctx.commit, branch=ctx.branch)
+    ctx.brain = brain
+    chosen = list(providers) if providers is not None else REGISTRY.applicable(ctx)
     result = BuildResult(brain=brain, report=MergeReport())
 
     for provider in sorted(chosen, key=lambda p: (p.order, p.id)):
