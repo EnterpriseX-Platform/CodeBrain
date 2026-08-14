@@ -527,7 +527,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-422 tests, no external test runner required.
+434 tests, no external test runner required.
 
 ---
 

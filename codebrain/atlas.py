@@ -81,6 +81,9 @@ class Atlas:
         self._what()
         self._how()
         self._shape()
+        self._behavior()
+        self._meaning()
+        self._contracts()
         self._risk()
         self._people()
         self._pipelines()
@@ -199,6 +202,152 @@ class Atlas:
             for node in ranked:
                 self.w(f"| `{node.key}` | {defines[node.id]} | {imported_by[node.id]} |")
 
+    def _behavior(self) -> None:
+        """L2 — what it does when it runs."""
+        routes = [n for n in self.brain.nodes.values()
+                  if isinstance(n, Node) and n.kind == "route"]
+        entrypoints = [n for n in self.brain.nodes.values()
+                       if isinstance(n, Node) and n.kind == "entrypoint"]
+        jobs = [n for n in self.brain.nodes.values()
+                if isinstance(n, Node) and n.kind == "job"]
+        env_vars = self.value("environment_variables") or []
+        stores = self.value("data_stores") or []
+        outbound = self.value("outbound_network") or []
+        if not (routes or entrypoints or jobs or env_vars or stores or outbound):
+            return
+
+        self.h(2, "What it does when it runs")
+
+        if routes:
+            self.w(f"**{len(routes)} HTTP route(s)** — every one is a public "
+                   "contract, callable by anyone.")
+            self.w()
+            self.w("| Route | Handler | Where |")
+            self.w("|---|---|---|")
+            for node in sorted(routes, key=lambda n: n.key)[:20]:
+                self.w(f"| `{node.key}` | `{node.attrs.get('handler') or '—'}` "
+                       f"| `{node.attrs.get('module') or '—'}` |")
+            if len(routes) > 20:
+                self.w(f"| … {len(routes) - 20} more | | |")
+            self.w()
+
+        if entrypoints:
+            self.w(f"**Entrypoints** — {len(entrypoints)} place(s) the process "
+                   "can start:")
+            self.w()
+            for node in sorted(entrypoints, key=lambda n: n.key)[:10]:
+                self.w(f"- `{node.key}`")
+            self.w()
+
+        if jobs:
+            self.w(f"**Background work** — {len(jobs)} job(s) on a queue or a "
+                   "schedule:")
+            self.w()
+            for node in sorted(jobs, key=lambda n: n.key)[:10]:
+                self.w(f"- `{node.name}` in `{node.attrs.get('module')}` "
+                       f"(via `{node.attrs.get('trigger')}`)")
+            self.w()
+
+        if env_vars:
+            self.w(f"**Configuration** — reads {len(env_vars)} environment "
+                   f"variable(s): {', '.join(f'`{v}`' for v in env_vars[:15])}"
+                   + (f", +{len(env_vars) - 15} more" if len(env_vars) > 15 else ""))
+            self.w()
+        if stores or outbound:
+            bits = []
+            if stores:
+                bits.append("talks to " + ", ".join(f"`{s}`" for s in stores))
+            if outbound:
+                bits.append("makes outbound calls via "
+                            + ", ".join(f"`{s}`" for s in outbound))
+            self.w("**External surface** — " + "; ".join(bits) + ".")
+
+    def _meaning(self) -> None:
+        """L3 — what it means, as far as structure can tell."""
+        contexts = [n for n in self.brain.nodes.values()
+                    if isinstance(n, Node) and n.kind == "context"]
+        language = self.value("ubiquitous_language") or []
+        entities = self.value("entity_candidates") or []
+        if not (contexts or language or entities):
+            return
+
+        self.h(2, "What it means")
+        self.w("Read off structure and naming, not from a model — so these are "
+               "candidates the code supports, not a domain model anyone has "
+               "agreed to.")
+        self.w()
+
+        if contexts:
+            self.w("| Context | Modules | Cohesion | |")
+            self.w("|---|---:|---:|---|")
+            for node in sorted(contexts, key=lambda n: -n.attrs.get("cohesion", 0)):
+                cohesion = node.attrs.get("cohesion", 0)
+                self.w(f"| `{node.key}` | {node.attrs.get('modules', 0)} | "
+                       f"{cohesion:.0%} | {provenance(node.env)} |")
+            self.w()
+            self.w("Cohesion is internal imports over all imports leaving that "
+                   "directory: high means a real boundary, low means the name is "
+                   "the only thing holding it together.")
+            self.w()
+
+        if language:
+            terms = ", ".join(f"`{t['term']}`" for t in language[:20])
+            self.w(f"**Ubiquitous language** — the vocabulary the code actually "
+                   f"shares: {terms}")
+            self.w()
+
+        if entities:
+            self.w("**Entity candidates** — classes whose vocabulary recurs "
+                   "across modules:")
+            self.w()
+            for entity in entities[:10]:
+                self.w(f"- `{entity['name']}` in `{entity['module']}`")
+
+    def _contracts(self) -> None:
+        """L6 — what must not break."""
+        contracts = [f for f in self.brain.facts.values()
+                     if f.predicate == "public_contract"]
+        zones = [f for f in self.brain.facts.values()
+                 if f.predicate == "policy_zone"]
+        if not (contracts or zones):
+            return
+
+        self.h(2, "What must not break")
+
+        if zones:
+            # Declared by a person, so they lead: these are the only constraints
+            # allowed to stop an agent outright.
+            by_zone: dict[str, list[str]] = defaultdict(list)
+            for fact in zones:
+                by_zone[str((fact.value or {}).get("zone", "?"))].append(
+                    fact.subject.split(":file:", 1)[-1])
+            self.w("**Declared policy zones** — stated by a person in "
+                   "`.codebrain.toml`, and the only constraints that block an "
+                   "agent rather than warning it.")
+            self.w()
+            for zone, paths in sorted(by_zone.items()):
+                self.w(f"- **{zone}** — {len(paths)} file(s), e.g. "
+                       + ", ".join(f"`{p}`" for p in sorted(paths)[:3]))
+            self.w()
+
+        if contracts:
+            ranked = sorted(
+                contracts,
+                key=lambda f: -int((f.value or {}).get("consumer_count", 0) or 0))
+            self.w(f"**Public contracts** — {len(contracts)} thing(s) other code "
+                   "depends on the exact shape of.")
+            self.w()
+            self.w("| What | Depended on by | |")
+            self.w("|---|---:|---|")
+            for fact in ranked[:15]:
+                value = fact.value or {}
+                name = fact.subject.split("symbol:", 1)[-1].split("route:", 1)[-1]
+                count = value.get("consumer_count")
+                self.w(f"| `{name}` | {count if count else 'external callers'} "
+                       f"| {provenance(fact.env)} |")
+            if len(contracts) > 15:
+                self.w(f"| … {len(contracts) - 15} more | | |")
+
     def _risk(self) -> None:
         hotspots = self.value("hotspots") or []
         bus_factor = self._bus_factor()
@@ -312,6 +461,23 @@ class Atlas:
         if history_gap:
             gaps.append(f"{history_gap.get('files_without_history')} file(s) have no "
                         f"history signal ({history_gap.get('reason')}).")
+
+        behavior_gap = self.value("behavior_coverage_gap")
+        if behavior_gap:
+            gaps.append("Runtime surface is read from decorators and call syntax, so "
+                        + ", ".join(behavior_gap.get("misses", [])[:3])
+                        + f" are invisible — {behavior_gap.get('impact')}.")
+
+        semantics_gap = self.value("semantics_coverage_gap")
+        if semantics_gap:
+            gaps.append(f"{semantics_gap.get('impact')} ("
+                        f"{semantics_gap.get('reason')}).")
+
+        untested = [f for f in self.brain.facts.values()
+                    if f.predicate == "untested_churn"]
+        if untested:
+            gaps.append(f"{len(untested)} file(s) change often and no test reaches "
+                        "them — a mistake there fails silently.")
 
         empty = [LAYER_NAMES[layer] for layer in Layer
                  if not self.brain.by_layer(layer) and layer is not Layer.L7]
