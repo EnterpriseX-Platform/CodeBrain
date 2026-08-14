@@ -21,13 +21,14 @@ from . import __version__
 from .atlas import render as render_atlas
 from .diff import diff as diff_brains
 from .diff import render as render_diff
-from .model import LAYER_NAMES, Layer
+from .model import LAYER_NAMES, REPO as REPO_SUBJECT, Layer
 from .pack import DEFAULT_BUDGET, brief as render_brief, compile_pack
 from .providers import REGISTRY, BuildContext
 from .providers import build as run_build
 from .store import (
     BRAIN_DIR,
     BrainNotFound,
+    append_memory,
     apply_touched,
     clear_touched,
     exists,
@@ -493,14 +494,108 @@ def cmd_eval(args: argparse.Namespace) -> int:
               "— this is slow by design.")
     report = evaluate(brain, Path(args.root), limit=args.cases, skip=args.skip,
                       budget=args.budget, rigorous=args.rigorous,
+                      memory=args.memory,
                       log=print if args.verbose else None)
-    print(render_eval(report, verbose=args.verbose, rigorous=args.rigorous))
+    print(render_eval(report, verbose=args.verbose, rigorous=args.rigorous,
+                      memory=args.memory))
     if not report.n:
         return 0
     # A pack that does not beat plain search has not earned its place in the
     # session, so CI can gate on it.
     delta = report.mean("pack_recall") - report.mean("grep_recall")
     return 1 if (args.check and delta <= 0) else 0
+
+
+def cmd_learn(args: argparse.Namespace) -> int:
+    """Stop hook: fold what a session did and found into L7."""
+    from .memory import Session, from_session
+
+    payload = _hook_input() if not sys.stdin.isatty() else {}
+    brain_dir = Path(args.brain)
+    if not brain_dir.is_dir():
+        return 0
+
+    touched = sorted(read_touched(brain_dir))
+    task = args.task or payload.get("prompt") or ""
+    lessons = tuple(args.lesson or ())
+    questions = tuple(args.question or ())
+    if not (touched or lessons or questions):
+        return 0  # nothing happened worth remembering
+
+    try:
+        brain = load(brain_dir)
+    except (BrainNotFound, ValueError, OSError):
+        return 0
+
+    commits = brain.fact(REPO_SUBJECT, "commit_count", Layer.L4)
+    session = Session(
+        session_id=str(payload.get("session_id") or args.session or "local"),
+        task=task, files=tuple(touched), lessons=lessons, questions=questions,
+        commit=brain.manifest.as_of,
+        commits_now=commits.value if commits and isinstance(commits.value, int) else 0,
+        succeeded=None if args.outcome is None else args.outcome == "success",
+    )
+
+    try:
+        written = append_memory(brain_dir, from_session(session))
+    except (OSError, ValueError):
+        return 0
+    if not args.quiet:
+        print(f"Recorded {written} memory record(s) from session "
+              f"{session.session_id}.")
+    return 0
+
+
+def cmd_remember(args: argparse.Namespace) -> int:
+    from .memory import remember
+
+    try:
+        brain = load(args.brain)
+    except (BrainNotFound, ValueError) as exc:
+        print(f"codebrain: {exc}", file=sys.stderr)
+        return 2
+
+    commits = brain.fact(REPO_SUBJECT, "commit_count", Layer.L4)
+    about = f"{Layer.L0}:file:{args.about}" if args.about else REPO_SUBJECT
+    fact = remember(args.text, about=about, task=args.task or "",
+                    commit=brain.manifest.as_of,
+                    commits_now=commits.value if commits and
+                    isinstance(commits.value, int) else 0,
+                    human=args.human)
+    append_memory(args.brain, [fact])
+    who = "human" if args.human else "agent"
+    print(f"Remembered ({who}, {fact.env.method}): {args.text}")
+    return 0
+
+
+def cmd_dispute(args: argparse.Namespace) -> int:
+    from .memory import dispute
+
+    try:
+        brain = load(args.brain)
+    except (BrainNotFound, ValueError) as exc:
+        print(f"codebrain: {exc}", file=sys.stderr)
+        return 2
+
+    commits = brain.fact(REPO_SUBJECT, "commit_count", Layer.L4)
+    record, outcome = dispute(
+        brain, args.record, args.reason, commit=brain.manifest.as_of,
+        commits_now=commits.value if commits and isinstance(commits.value, int) else 0,
+        human=args.human)
+
+    if outcome == "missing":
+        print(f"codebrain: no record {args.record!r} in this Brain", file=sys.stderr)
+        return 2
+
+    append_memory(args.brain, [record])
+    if outcome == "overruled":
+        save(brain, args.brain)  # a human demotion changes the claim itself
+        print(f"Overruled {args.record} — demoted and recorded.")
+    else:
+        print(f"Dispute recorded against {args.record}. Packs will surface it; "
+              "the claim itself is unchanged.\n"
+              "Only a human (--human) may demote an extracted fact.")
+    return 0
 
 
 def cmd_serve(args: argparse.Namespace) -> int:
@@ -556,6 +651,8 @@ HOOKS = {
                     "hooks": [{"type": "command", "command": "codebrain guard"}]}],
     "PostToolUse": [{"matcher": "Edit|Write|MultiEdit",
                      "hooks": [{"type": "command", "command": "codebrain touch"}]}],
+    "Stop": [{"hooks": [{"type": "command",
+                         "command": "codebrain learn --quiet"}]}],
 }
 
 CLAUDE_STANZA = """\
@@ -800,12 +897,42 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip", type=int, default=0)
     p.add_argument("--budget", type=int, default=DEFAULT_BUDGET)
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--memory", action="store_true",
+                   help="measure the write-back effect: same Brain, with "
+                        "and without a previous session in memory")
     p.add_argument("--rigorous", action="store_true",
                    help="build a Brain per commit from its parent, so the "
                         "Brain cannot have seen the answer (slow)")
     p.add_argument("--check", action="store_true",
                    help="exit non-zero if packs do not beat keyword search")
     p.set_defaults(func=cmd_eval)
+
+    p = sub.add_parser("learn", help="fold a finished session into memory (Stop hook)")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--session", default=None)
+    p.add_argument("--task", default=None)
+    p.add_argument("--lesson", action="append", help="something learned (repeatable)")
+    p.add_argument("--question", action="append", help="an unanswered question")
+    p.add_argument("--outcome", choices=("success", "failure"), default=None)
+    p.add_argument("--quiet", action="store_true")
+    p.set_defaults(func=cmd_learn)
+
+    p = sub.add_parser("remember", help="record one lesson")
+    p.add_argument("text")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--about", default=None, help="a file this is about")
+    p.add_argument("--task", default=None)
+    p.add_argument("--human", action="store_true",
+                   help="record as a human assertion rather than an agent reading")
+    p.set_defaults(func=cmd_remember)
+
+    p = sub.add_parser("dispute", help="contest a claim in the Brain")
+    p.add_argument("record", help="the record id being disputed")
+    p.add_argument("--reason", required=True)
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--human", action="store_true",
+                   help="overrule outright; agents may only dispute")
+    p.set_defaults(func=cmd_dispute)
 
     p = sub.add_parser("serve", help="run the MCP server on stdio")
     p.add_argument("--brain", default=BRAIN_DIR)

@@ -20,8 +20,10 @@ begins informed instead of blind.
 
 ## Status
 
-**P4 — semantics, behavior and constraints.** Complete. All eight layers are
-populated, every one of them offline and deterministic.
+**P5 — memory and write-back.** Shipped. All eight layers now populate, and L7
+is the only one that accumulates rather than being re-derived. Its gate —
+*a second agent measurably outperforms the first because of what the first wrote
+back* — is **not demonstrated**; see below.
 
 | Phase | Scope | State |
 |-------|-------|-------|
@@ -30,8 +32,8 @@ populated, every one of them offline and deterministic.
 | **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ⚠️ shipped; retrieval gate not met leak-free |
 | **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
 | **P4** | L2 behavior, L3 semantics, full L6, rigorous eval | ✅ done |
-| P5 | Memory and agent write-back | next |
-| P6 | Cortex — federation across repos | |
+| **P5** | L7 memory, write-back, disputes, decay | ⚠️ shipped; write-back gate not demonstrated |
+| P6 | Cortex — federation across repos | next |
 
 ### Measured, not asserted
 
@@ -68,8 +70,32 @@ Retrieval parity at ~1,000 tokens *plus* those facets may well be worth it; this
 harness cannot demonstrate that, and pretending otherwise would be exactly the
 kind of confident unverified claim the whole project is built to avoid.
 
-Measuring the other facets needs agents completing real tasks, which is P5's
-problem.
+Measuring the other facets needs agents completing real tasks.
+
+**Write-back — a null result from an inadequate harness.** `codebrain eval
+--memory` measures the same Brain with and without a previous session in memory,
+so the delta is the value of write-back and nothing else:
+
+| Repository | Cases | With memory | Without | Delta |
+|---|---:|---:|---:|---:|
+| requests | 13 | 84.6% | 84.6% | ±0.0% |
+
+The mechanism works — a prior session's files do get lifted up the anchor
+ranking, and that is unit-tested. The **harness** is what fails. It pairs
+consecutive commits that touch overlapping files and treats the earlier one as
+"a previous session", but measured task overlap across those pairs is mostly
+0.00–0.25. Only 1 of 13 pairs describes genuinely the same work (*"Increase
+chardet upper limit to 7"* → *"…to 8"*), and both arms already solved that one.
+
+The premise is wrong, not just the result: **a commit is the end of a session,
+not a handoff mid-task.** What P5's gate actually needs is traces of two agents
+working the same problem in sequence, and git history does not contain those.
+Getting them means instrumenting real sessions, which is a different piece of
+work from anything built so far.
+
+The tuning knob that would manufacture a win here — loosening the task-overlap
+function until unrelated commits start boosting each other — is precisely the
+thing not to do.
 
 ```bash
 codebrain eval --cases 60              # fast, leaky, good for iteration
@@ -232,6 +258,43 @@ These are `ASSERTED`, so they outrank anything the machinery derives, and they
 are the **only** constraint permitted to stop an agent. Inferred constraints —
 churn, bus factor, missing tests — warn and never block, because denying an edit
 on a guess gets the hook uninstalled by lunchtime.
+
+## Memory — the only layer that accumulates
+
+Everything below L7 is re-derived from the code on every build. L7 is what a
+session leaves behind.
+
+```bash
+codebrain remember "the limiter store is Redis, not in-process" --about payments/api.py
+codebrain learn --session s1 --task "add rate limiting" --lesson "..." --outcome success
+```
+
+It comes back in the next relevant pack:
+
+```
+MEMORY
+  a previous session on "fix carry-forward of verified claims" succeeded,
+  touching codebrain/verify.py  [EXTRACTED]
+  learned: carry_forward must match refuted claims on status, not method  [INFERRED 0.60]
+  learned: the envelope must never be mutated during verification  [ASSERTED]
+```
+
+Three rules keep it honest:
+
+**An agent's claim is not a human's claim.** What an agent *did* — the files it
+edited — is `EXTRACTED`, a fact about the session. What it *concluded* is
+`INFERRED`, a reading. Only a person gets `ASSERTED`.
+
+**An agent may dispute, not overrule.** If extraction says one thing and an agent
+says another, the agent files a dispute that packs surface under `UNKNOWNS`; the
+claim itself is untouched. A model that can demote an AST fact by asserting
+harder can poison every session downstream, and it will do so confidently. A
+human can overrule, with `--human`.
+
+**Memory ages.** A lesson from four hundred commits ago is about a different
+codebase, so it fades on a half-life — computed at read time from the distance
+between then and now, never by mutating stored confidence, which would make two
+reads of the same Brain disagree.
 
 ## Verification — claims are executable
 
@@ -409,7 +472,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-345 tests, no external test runner required.
+384 tests, no external test runner required.
 
 ---
 

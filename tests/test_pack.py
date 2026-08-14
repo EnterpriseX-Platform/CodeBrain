@@ -251,6 +251,125 @@ class TestBrief(unittest.TestCase):
         self.assertIn("BRAIN", brief(Brain()))
 
 
+class TestMemoryFacet(unittest.TestCase):
+    def _with_memory(self, commit_count: int = 100, **kw):
+        from codebrain.memory import Session, from_session
+
+        brain = demo_brain()
+        # Set once: a second commit_count fact would lose the envelope merge to
+        # the first, and the test would be measuring the wrong number.
+        brain.add(Fact(layer=Layer.L4, subject=REPO, predicate="commit_count",
+                       value=commit_count, env=env()))
+        defaults = dict(session_id="s1", task="add rate limiting to charge_endpoint",
+                        files=("pay/settle.py",), commit="abc1234",
+                        commits_now=100, succeeded=True)
+        defaults.update(kw)
+        brain.extend(from_session(Session(**defaults)))
+        return brain
+
+    def test_a_previous_session_appears_in_the_pack(self):
+        pack = compile_pack(self._with_memory(), "fix charge_endpoint rate limiting")
+        text = " ".join(i.text for i in pack.by_facet().get("memory", []))
+        self.assertIn("previous session", text)
+
+    def test_lessons_appear(self):
+        brain = self._with_memory(lessons=("the limiter store is Redis",))
+        pack = compile_pack(brain, "fix charge_endpoint rate limiting")
+        text = " ".join(i.text for i in pack.by_facet().get("memory", []))
+        self.assertIn("Redis", text)
+
+    def test_agent_memory_is_labelled_inferred(self):
+        brain = self._with_memory(lessons=("the limiter store is Redis",))
+        pack = compile_pack(brain, "fix charge_endpoint rate limiting")
+        text = " ".join(i.text for i in pack.by_facet().get("memory", []))
+        self.assertIn("INFERRED", text)
+
+    def test_memory_survives_a_tight_budget(self):
+        # It is the only facet nobody can re-derive; dropping it to fit blast
+        # radius would throw away what a previous session paid for.
+        brain = self._with_memory(lessons=("the limiter store is Redis",))
+        pack = compile_pack(brain, "fix charge_endpoint", budget=160)
+        self.assertTrue(pack.by_facet().get("memory"))
+
+    def test_faded_memory_is_not_shown(self):
+        from codebrain.memory import HALF_LIFE_COMMITS
+
+        brain = self._with_memory(commit_count=HALF_LIFE_COMMITS * 9,
+                                  lessons=("ancient advice",), commits_now=0)
+        pack = compile_pack(brain, "fix charge_endpoint")
+        text = " ".join(i.text for i in pack.by_facet().get("memory", []))
+        self.assertNotIn("ancient advice", text)
+
+
+class TestMemoryBoost(unittest.TestCase):
+    """Memory has to change the answer, or write-back is a note in the margin."""
+
+    def _brain(self, past_task: str, past_files: tuple[str, ...],
+               commit_count: int = 100):
+        from codebrain.memory import Session, from_session
+
+        brain = demo_brain()
+        brain.add(Fact(layer=Layer.L4, subject=REPO, predicate="commit_count",
+                       value=commit_count, env=env()))
+        brain.extend(from_session(Session(
+            session_id="s1", task=past_task, files=past_files,
+            commit="abc1234", commits_now=100, succeeded=True)))
+        return brain
+
+    def test_a_prior_session_lifts_the_files_it_touched(self):
+        task = "add rate limiting to the charge endpoint"
+        cold = Compiler(demo_brain()).score_anchors(task, limit=8)
+        warm = Compiler(self._brain(task, ("pay/settle.py",))).score_anchors(task,
+                                                                             limit=8)
+        cold_rank = [n.id for n, _ in cold]
+        warm_rank = [n.id for n, _ in warm]
+        target = "L0:file:pay/settle.py"
+        self.assertIn(target, warm_rank)
+        if target in cold_rank:
+            self.assertLess(warm_rank.index(target), cold_rank.index(target))
+
+    def test_an_unrelated_prior_session_does_not_boost(self):
+        brain = self._brain("update the deployment documentation",
+                            ("pay/settle.py",))
+        boosts = Compiler(brain).memory_boost(tokenize("fix charge_endpoint"))
+        self.assertEqual(boosts, {})
+
+    def test_boost_scales_with_task_overlap(self):
+        exact = Compiler(self._brain("fix charge_endpoint",
+                                     ("pay/settle.py",))).memory_boost(
+            tokenize("fix charge_endpoint"))
+        partial = Compiler(self._brain("fix charge_endpoint in the billing service",
+                                       ("pay/settle.py",))).memory_boost(
+            tokenize("fix charge_endpoint"))
+        self.assertGreater(exact["pay/settle.py"], partial["pay/settle.py"])
+
+    def test_faded_memory_boosts_less(self):
+        from codebrain.memory import HALF_LIFE_COMMITS
+
+        fresh = Compiler(self._brain("fix charge_endpoint", ("pay/settle.py",))
+                         ).memory_boost(tokenize("fix charge_endpoint"))
+        faded = Compiler(self._brain("fix charge_endpoint", ("pay/settle.py",),
+                                     commit_count=100 + HALF_LIFE_COMMITS)
+                         ).memory_boost(tokenize("fix charge_endpoint"))
+        self.assertLess(faded["pay/settle.py"], fresh["pay/settle.py"])
+        self.assertAlmostEqual(faded["pay/settle.py"] / fresh["pay/settle.py"],
+                               0.5, places=6)
+
+
+class TestDisputesSurface(unittest.TestCase):
+    def test_a_disputed_anchor_is_flagged_as_an_unknown(self):
+        from codebrain.memory import dispute
+
+        brain = demo_brain()
+        record, _ = dispute(brain, "L1:symbol:pay/api.py#charge_endpoint",
+                            "this was moved last week")
+        brain.add(record)
+        pack = compile_pack(brain, "fix charge_endpoint")
+        text = " ".join(i.text for i in pack.by_facet().get("unknowns", []))
+        self.assertIn("disputed", text)
+        self.assertIn("moved last week", text)
+
+
 class TestStaleness(unittest.TestCase):
     def test_stale_records_are_announced(self):
         brain = demo_brain()

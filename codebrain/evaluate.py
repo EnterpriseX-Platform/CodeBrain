@@ -277,19 +277,27 @@ def run(brain: Brain, root: Path, cases: list[Case], budget: int = 6000) -> Repo
     return report
 
 
-def render(report: Report, verbose: bool = False, rigorous: bool = False) -> str:
+def render(report: Report, verbose: bool = False, rigorous: bool = False,
+           memory: bool = False) -> str:
     if not report.n:
         return ("No usable evaluation cases. This needs a repository with git "
                 "history whose commit subjects carry at least two meaningful words.")
 
+    left, right = ("with memory", "without memory") if memory else ("pack", "search")
+    if memory:
+        heading = (f"Write-back effect — {report.n} case(s) where a later commit "
+                   "touches files a previous one did")
+    else:
+        heading = (f"Context pack vs keyword search — {report.n} case(s) "
+                   "from git history")
     lines = [
-        f"Context pack vs keyword search — {report.n} case(s) from git history",
+        heading,
         "",
-        f"  pack recall@k     {report.mean('pack_recall'):.1%}",
-        f"  search recall@k   {report.mean('grep_recall'):.1%}",
+        f"  {left:<17} {report.mean('pack_recall'):.1%}",
+        f"  {right:<17} {report.mean('grep_recall'):.1%}",
         f"  delta             {report.mean('pack_recall') - report.mean('grep_recall'):+.1%}",
         "",
-        f"  pack wins {report.wins} · ties {report.ties} · losses {report.losses}",
+        f"  better {report.wins} · same {report.ties} · worse {report.losses}",
         f"  mean pack size    {report.mean('tokens'):.0f} tokens",
     ]
     if report.skipped:
@@ -303,7 +311,14 @@ def render(report: Report, verbose: bool = False, rigorous: bool = False) -> str
             lines.append(f"  {subject}  {result.pack_recall:>5.0%}   "
                          f"{result.grep_recall:>5.0%}")
 
-    if rigorous:
+    if memory:
+        lines += [
+            "",
+            "Both arms use the same Brain, built from the later commit's parent.",
+            "The only difference is whether the earlier session was written back,",
+            "so this delta is the value of memory and nothing else.",
+        ]
+    elif rigorous:
         lines += [
             "",
             "Each case used a Brain built from that commit's parent, in a detached",
@@ -389,12 +404,86 @@ def run_rigorous(root: Path, cases: list[Case], budget: int = 6000,
     return report
 
 
+def run_memory_effect(root: Path, cases: list[Case], budget: int = 6000,
+                      log=None) -> Report:
+    """Does write-back make the *next* task easier?
+
+    P5's gate, measured without a live agent. Git history supplies the pair: for
+    two commits A then B that touch overlapping files, A is what a previous
+    session did and B is the task now being asked. The Brain is built at B's
+    parent, so it cannot know B — and A is genuinely in the past, so ingesting
+    it leaks nothing.
+
+    `pack_recall` is the arm with A's session in memory; `grep_recall` carries
+    the same pack *without* memory, so the report's delta reads as the effect of
+    write-back rather than as a comparison against search.
+    """
+    import shutil
+    import tempfile
+
+    from .memory import Session, from_session
+    from .providers import BuildContext
+    from .providers import build as run_build
+
+    from . import extractors  # noqa: F401
+
+    ordered = list(reversed(cases))  # git log is newest-first; walk forward
+    report = Report()
+
+    for index in range(1, len(ordered)):
+        earlier, later = ordered[index - 1], ordered[index]
+        if not (set(earlier.changed) & set(later.changed)):
+            continue  # unrelated work: memory has nothing to offer
+        parent = git_stripped(root, "rev-parse", f"{later.sha}^")
+        if not parent:
+            report.skipped += 1
+            continue
+
+        workdir = Path(tempfile.mkdtemp(prefix="codebrain-mem-"))
+        checkout = workdir / "tree"
+        try:
+            if git(root, "worktree", "add", "--detach", str(checkout), parent) is None:
+                report.skipped += 1
+                continue
+
+            ctx = BuildContext(root=checkout, commit=parent)
+            brain = run_build(ctx).brain
+
+            cold, tokens = pack_prediction(brain, later.subject, budget,
+                                           root=checkout)
+            brain.extend(from_session(Session(
+                session_id=f"eval-{earlier.sha[:8]}", task=earlier.subject,
+                files=tuple(earlier.changed), commit=parent, succeeded=True)))
+            warm, warm_tokens = pack_prediction(brain, later.subject, budget,
+                                                root=checkout)
+            if not warm and not cold:
+                report.skipped += 1
+                continue
+
+            k = min(max(len(warm), len(cold)), 25)
+            report.results.append(CaseResult(
+                case=later, pack_files=warm[:k], grep_files=cold[:k],
+                pack_recall=recall(warm, later.changed, k),
+                grep_recall=recall(cold, later.changed, k),
+                tokens=warm_tokens, k=k,
+            ))
+            if log:
+                log(f"  [{len(report.results)}] {later.subject[:46]}")
+        finally:
+            git(root, "worktree", "remove", "--force", str(checkout))
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    return report
+
+
 def evaluate(brain: Brain, root: Path, limit: int = DEFAULT_CASES,
              skip: int = 0, budget: int = 6000, rigorous: bool = False,
-             log=None) -> Report:
+             memory: bool = False, log=None) -> Report:
     if not is_repo(root):
         return Report()
     cases = collect_cases(root, limit, skip)
+    if memory:
+        return run_memory_effect(root, cases, budget, log=log)
     if rigorous:
         return run_rigorous(root, cases, budget, log=log)
     return run(brain, root, cases, budget)

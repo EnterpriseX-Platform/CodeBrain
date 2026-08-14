@@ -45,7 +45,9 @@ CHARS_PER_TOKEN = 4
 DEFAULT_BUDGET = 6000
 
 #: Facets that are small, critical, and reserved before the large ones compete.
-GUARANTEED = ("anchors", "constraints", "runbook", "unknowns")
+#: Memory is here because it is the only facet that accumulates — dropping it to
+#: fit blast radius would throw away the one thing a previous session paid for.
+GUARANTEED = ("anchors", "constraints", "runbook", "memory", "unknowns")
 
 #: Share of the budget the guaranteed facets may claim before yielding.
 GUARANTEE_SHARE = 0.45
@@ -167,6 +169,7 @@ class Pack:
         ("precedent", "PRECEDENT"),
         ("constraints", "CONSTRAINTS"),
         ("runbook", "RUNBOOK"),
+        ("memory", "MEMORY"),
         ("unknowns", "UNKNOWNS"),
     )
 
@@ -224,6 +227,11 @@ CONTENT_SCAN_BYTES = 250_000_000
 #: Content matches are weaker evidence than a symbol whose name matches, but
 #: they are the only way to find code described by behaviour rather than named.
 CONTENT_WEIGHT = 2.2
+
+#: How hard a prior session's outcome pulls a file up the anchor ranking, at
+#: full task overlap and undecayed memory. Deliberately below an exact symbol
+#: name match: somebody having worked here before is a hint, not an answer.
+MEMORY_BOOST = 9.0
 
 
 class Compiler:
@@ -343,6 +351,23 @@ class Compiler:
         for node, value in self.content_anchors(terms, wants_tests, limit * 2):
             existing = merged.get(node.id)
             merged[node.id] = (node, (existing[1] if existing else 0.0) + value)
+
+        # A previous session that did similar work already found where it lived.
+        # This is the mechanism by which write-back pays off: without it memory
+        # is a note in the margin rather than something that changes the answer.
+        boosts = self.memory_boost(terms)
+        for node_id, (node, value) in list(merged.items()):
+            path = str(node.attrs.get("module") or node.attrs.get("path")
+                       or node.key).split("#", 1)[0]
+            if path in boosts:
+                merged[node_id] = (node, value + boosts[path])
+        for path, boost in boosts.items():
+            file_id = f"{Layer.L0}:file:{path}"
+            if file_id in merged:
+                continue
+            node = self.brain.nodes.get(file_id)
+            if node is not None and node.env.usable():
+                merged[file_id] = (node, boost)
 
         ranked = sorted(merged.values(), key=lambda pair: (-pair[1], pair[0].id))
         return ranked[:limit]
@@ -542,6 +567,92 @@ class Compiler:
                               20.0 if intent == "test" else 12.0, found.id))
         return items
 
+    def memory_boost(self, terms: set[str]) -> dict[str, float]:
+        """Files a previous session touched for a task like this one.
+
+        Weighted by how much the two task descriptions overlap and by how far
+        the memory has faded, so a lesson from a similar recent task counts and
+        one from an unrelated ancient task does not.
+        """
+        from .memory import OUTCOME, effective_memory_confidence
+
+        if not terms:
+            return {}
+        commits = self.commits_now()
+        boosts: dict[str, float] = {}
+
+        for fact in self.brain.facts.values():
+            if fact.layer is not Layer.L7 or not fact.predicate.startswith(OUTCOME):
+                continue
+            if not fact.env.usable():
+                continue
+            value = fact.value or {}
+            past = tokenize(str(value.get("task", "")))
+            if not past:
+                continue
+            overlap = len(past & terms) / len(past | terms)
+            if overlap <= 0:
+                continue
+            weight = effective_memory_confidence(fact, commits)
+            for path in value.get("files", ()):
+                boosts[path] = max(boosts.get(path, 0.0),
+                                   MEMORY_BOOST * overlap * weight)
+        return boosts
+
+    def commits_now(self) -> int:
+        found = self.brain.fact(REPO, "commit_count", Layer.L4)
+        value = found.value if found else 0
+        return value if isinstance(value, int) else 0
+
+    def memory(self, scored: list[tuple[Node, float]]) -> list[Item]:
+        """What earlier sessions left behind for this part of the code.
+
+        The only facet whose content nobody extracted — it exists because
+        somebody, or something, did the work once already.
+        """
+        from .memory import (
+            LESSON,
+            OUTCOME,
+            QUESTION,
+            RESOLVED,
+            lessons_for,
+            memory_weight,
+        )
+
+        paths = {self._file_id_of(node).split(":file:", 1)[-1] for node, _ in scored}
+        commits = self.commits_now()
+        items: list[Item] = []
+
+        for fact, weight in lessons_for(self.brain, paths, commits)[:12]:
+            kind = fact.predicate.split(":", 1)[0]
+            # Fade is about *age*, and only age. Ranking uses confidence too,
+            # but labelling a brand-new INFERRED lesson "faded to 54%" tells the
+            # reader it is stale when it is merely uncertain — and the
+            # provenance tag already says how uncertain.
+            age = memory_weight(fact, commits)
+            faded = "" if age > 0.7 else f"  (aged to {age:.0%})"
+            if kind == LESSON:
+                text = f"learned: {fact.value}"
+            elif kind == RESOLVED:
+                value = fact.value or {}
+                text = f"resolved: {value.get('question')} → {value.get('answer')}"
+            elif kind == QUESTION:
+                text = f"still open: {fact.value}"
+            elif kind == OUTCOME:
+                value = fact.value or {}
+                names = ", ".join(sorted(value.get("files", []))[:4])
+                verdict = ("succeeded" if value.get("succeeded")
+                           else "failed" if value.get("succeeded") is False
+                           else "outcome unknown")
+                text = (f"a previous session on \"{value.get('task', '')[:60]}\" "
+                        f"{verdict}, touching {names}")
+            else:
+                continue
+            items.append(Item("memory",
+                              f"{text}  [{provenance_tag(fact.env)}]{faded}",
+                              6.0 + 8.0 * weight, fact.id))
+        return items
+
     def unknowns(self, scored: list[tuple[Node, float]]) -> list[Item]:
         """The edge of the map. Cheap, and the difference between a careful
         agent and a confident wrong one."""
@@ -570,6 +681,19 @@ class Compiler:
             items.append(Item("unknowns",
                               f"{inferred} of the anchors are inferred rather than "
                               "extracted — verify before relying on them", 8.0))
+
+        # A claim someone has contested is exactly what an agent must not take
+        # on trust, so it belongs with the other known unknowns.
+        from .memory import disputes_for
+
+        for fact in disputes_for(self.brain, [node.id for node, _ in scored]):
+            value = fact.value or {}
+            items.append(Item(
+                "unknowns",
+                f"disputed: {value.get('target')} — {value.get('reason')} "
+                f"[{provenance_tag(fact.env)}]",
+                12.0, fact.id,
+            ))
         return items
 
     # -- budget ------------------------------------------------------------
@@ -581,14 +705,31 @@ class Compiler:
         taken: list[Item] = []
         dropped: dict[str, int] = defaultdict(int)
 
+        # Round-robin across the guaranteed facets rather than first-come.
+        # Taken in order, `anchors` alone can consume the whole reserve and the
+        # "this file is frozen" line never makes it in — which is exactly the
+        # failure the reserve exists to prevent.
         reserve = int(budget * GUARANTEE_SHARE)
-        for facet in GUARANTEED:
-            for item in groups.get(facet, []):
+        queues = {facet: list(groups.get(facet, [])) for facet in GUARANTEED}
+        while any(queues.values()):
+            progressed = False
+            for facet in GUARANTEED:
+                queue = queues[facet]
+                if not queue:
+                    continue
+                item = queue[0]
                 if used + item.tokens <= reserve or not taken:
-                    taken.append(item)
+                    taken.append(queue.pop(0))
                     used += item.tokens
+                    progressed = True
                 else:
-                    dropped[facet] += 1
+                    dropped[facet] += len(queue)
+                    queues[facet] = []
+            if not progressed:
+                break
+        for facet, queue in queues.items():
+            if queue:
+                dropped[facet] += len(queue)
 
         rest: list[Item] = []
         for facet, items in groups.items():
@@ -627,6 +768,7 @@ def compile_pack(brain: Brain, task: str, budget: int = DEFAULT_BUDGET,
         "precedent": compiler.precedent(scored),
         "constraints": compiler.constraints(scored),
         "runbook": compiler.runbook(),
+        "memory": compiler.memory(scored),
         "unknowns": compiler.unknowns(scored),
     }
 
