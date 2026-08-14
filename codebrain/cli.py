@@ -19,6 +19,7 @@ from pathlib import Path
 
 from . import __version__
 from .atlas import render as render_atlas
+from .envelope import utc_now
 from .diff import diff as diff_brains
 from .diff import render as render_diff
 from .model import LAYER_NAMES, REPO as REPO_SUBJECT, Layer
@@ -230,9 +231,18 @@ def cmd_diff(args: argparse.Namespace) -> int:
 # someone's session gets uninstalled the first time it does.
 
 
-def _hook_input() -> dict:
-    """Read the hook payload from stdin. Absent or malformed is not an error."""
-    if sys.stdin is None or sys.stdin.isatty():
+def _hook_input(enabled: bool = False) -> dict:
+    """Read the hook payload from stdin — only when explicitly asked to.
+
+    Reading whenever stdin is "not a tty" looks right and is a trap: an open
+    pipe with nothing in it blocks on read forever, so the command hangs rather
+    than failing. A hook that hangs freezes the session, which is worse than a
+    hook that errors, and it happens in exactly the places nobody tests — CI,
+    shell pipelines, wrappers.
+
+    So the hooks pass --stdin and everything else is safe by construction.
+    """
+    if not enabled or sys.stdin is None or sys.stdin.isatty():
         return {}
     try:
         raw = sys.stdin.read()
@@ -261,7 +271,7 @@ def _load_quietly(brain_dir: str):
 
 
 def cmd_pack(args: argparse.Namespace) -> int:
-    payload = _hook_input() if args.stdin else {}
+    payload = _hook_input(args.stdin)
     task = args.task or payload.get("prompt") or ""
     if not task.strip():
         return 0
@@ -296,7 +306,7 @@ def cmd_brief(args: argparse.Namespace) -> int:
 
 def cmd_guard(args: argparse.Namespace) -> int:
     """PreToolUse: check a pending edit against L6 before it happens."""
-    payload = _hook_input()
+    payload = _hook_input(args.stdin)
     tool_input = payload.get("tool_input") or {}
     target = tool_input.get("file_path") or args.path or ""
     if not target:
@@ -380,7 +390,7 @@ def cmd_guard(args: argparse.Namespace) -> int:
 
 def cmd_touch(args: argparse.Namespace) -> int:
     """PostToolUse: note an edit so later packs do not serve stale facts."""
-    payload = _hook_input()
+    payload = _hook_input(args.stdin)
     tool_input = payload.get("tool_input") or {}
     target = tool_input.get("file_path") or args.path or ""
     if not target:
@@ -396,6 +406,19 @@ def cmd_touch(args: argparse.Namespace) -> int:
     try:
         record_touch(args.brain, [rel])
     except OSError:
+        pass
+
+    # If an experiment is running, this edit is also evidence in it.
+    try:
+        from .trial import Event, get_active, load_trace, save_trace, trace_path
+
+        active = get_active(args.brain)
+        if active is not None:
+            trace = load_trace(trace_path(args.brain, *active))
+            if trace is not None:
+                trace.events.append(Event(kind="edit", path=rel))
+                save_trace(args.brain, trace)
+    except Exception:  # noqa: BLE001 — instrumentation must never break a hook
         pass
     return 0
 
@@ -510,7 +533,7 @@ def cmd_learn(args: argparse.Namespace) -> int:
     """Stop hook: fold what a session did and found into L7."""
     from .memory import Session, from_session
 
-    payload = _hook_input() if not sys.stdin.isatty() else {}
+    payload = _hook_input(args.stdin)
     brain_dir = Path(args.brain)
     if not brain_dir.is_dir():
         return 0
@@ -598,6 +621,172 @@ def cmd_dispute(args: argparse.Namespace) -> int:
     return 0
 
 
+# -- trials ----------------------------------------------------------------
+
+
+def _run_verification(brain, root: Path, timeout: int) -> dict:
+    """Run the repository's own test command and report what happened."""
+    from .trial import verification_command
+    from .verify import execute
+
+    found = verification_command(brain)
+    if found is None:
+        return {}
+    command, method = found
+    outcome = execute(command, root, timeout=timeout)
+    return {"command": command, "command_method": method,
+            "exit_code": outcome.exit_code, "duration_s": round(outcome.duration, 2),
+            "ok": outcome.ok, "error": outcome.error}
+
+
+def cmd_trial_start(args: argparse.Namespace) -> int:
+    from .trial import assign_arm, TREATMENT, Trace, save_trace, set_active
+
+    brain_dir = Path(args.brain)
+    try:
+        brain = load(brain_dir)
+    except (BrainNotFound, ValueError) as exc:
+        print(f"codebrain: {exc}", file=sys.stderr)
+        return 2
+
+    session = args.session or _hook_input(args.stdin).get("session_id") or "local"
+    arm = args.arm or assign_arm(args.trial, session, split=args.split)
+
+    trace = Trace(trial=args.trial, session=session, arm=arm, task=args.task or "",
+                  brain_commit=brain.manifest.as_of)
+    if args.verify:
+        trace.baseline = _run_verification(brain, Path(args.root), args.timeout)
+        if not trace.baseline:
+            trace.notes.append("no test command found; regressions cannot be detected")
+
+    if arm == TREATMENT and trace.task:
+        pack = compile_pack(brain, trace.task, budget=args.budget, root=args.root)
+        trace.context_tokens = pack.tokens
+        trace.context_facets = sorted(pack.by_facet())
+        if not args.quiet:
+            print(pack.render())
+
+    save_trace(brain_dir, trace)
+    set_active(brain_dir, args.trial, session)
+    if args.quiet:
+        print(f"[{args.trial}] session {session} assigned to {arm}",
+              file=sys.stderr)
+    return 0
+
+
+def cmd_trial_record(args: argparse.Namespace) -> int:
+    """Append an event. Called from hooks, so it fails open."""
+    from .trial import Event, get_active, load_trace, save_trace, trace_path
+
+    brain_dir = Path(args.brain)
+    active = (args.trial, args.session) if args.trial and args.session \
+        else get_active(brain_dir)
+    if active is None:
+        return 0
+    trial, session = active
+
+    path = trace_path(brain_dir, trial, session)
+    trace = load_trace(path)
+    if trace is None:
+        return 0
+
+    payload = _hook_input(args.stdin)
+    tool_input = payload.get("tool_input") or {}
+    edited = args.edit or tool_input.get("file_path")
+
+    if edited:
+        rel = str(edited).replace("\\", "/")
+        try:
+            root = str(Path(args.root).resolve()).replace("\\", "/")
+            if rel.startswith(root):
+                rel = rel[len(root):].lstrip("/")
+        except OSError:
+            pass
+        trace.events.append(Event(kind="edit", path=rel))
+    if args.command:
+        trace.events.append(Event(kind="command", command=args.command,
+                                  exit_code=args.exit_code))
+    if args.note:
+        trace.events.append(Event(kind="note", detail={"text": args.note}))
+
+    save_trace(brain_dir, trace)
+    return 0
+
+
+def cmd_trial_end(args: argparse.Namespace) -> int:
+    from .trial import (
+        FAILURE,
+        SUCCESS,
+        UNKNOWN,
+        clear_active,
+        get_active,
+        load_trace,
+        save_trace,
+        trace_path,
+    )
+
+    brain_dir = Path(args.brain)
+    active = (args.trial, args.session) if args.trial and args.session \
+        else get_active(brain_dir)
+    if active is None:
+        return 0
+    trial, session = active
+
+    trace = load_trace(trace_path(brain_dir, trial, session))
+    if trace is None:
+        return 0
+
+    try:
+        brain = load(brain_dir)
+    except (BrainNotFound, ValueError):
+        brain = None
+
+    if args.outcome:
+        trace.outcome = args.outcome
+    elif args.verify and brain is not None:
+        trace.verdict = _run_verification(brain, Path(args.root), args.timeout)
+        if not trace.verdict:
+            trace.outcome = UNKNOWN
+            trace.notes.append("no test command; outcome cannot be decided")
+        else:
+            trace.outcome = SUCCESS if trace.verdict.get("ok") else FAILURE
+    else:
+        # A session nobody verified is not a success and not a failure. Guessing
+        # here is how a harness quietly starts agreeing with itself.
+        trace.outcome = UNKNOWN
+        trace.notes.append("ended without verification")
+
+    trace.ended_at = utc_now()
+    save_trace(brain_dir, trace)
+    clear_active(brain_dir)
+    if not args.quiet:
+        print(f"[{trial}] session {session}: {trace.outcome} "
+              f"({len(trace.edits)} file(s) edited)")
+    return 0
+
+
+def cmd_trial_report(args: argparse.Namespace) -> int:
+    from .trial import list_trials, load_traces, render
+
+    brain_dir = Path(args.brain)
+    if not args.trial:
+        names = list_trials(brain_dir)
+        if not names:
+            print("No trials recorded.")
+            return 0
+        for name in names:
+            print(render(name, load_traces(brain_dir, name)))
+            print()
+        return 0
+
+    traces = load_traces(brain_dir, args.trial)
+    if args.json:
+        print(json.dumps([t.to_json() for t in traces], indent=2))
+        return 0
+    print(render(args.trial, traces))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .mcp_server import serve
 
@@ -648,11 +837,11 @@ HOOKS = {
     "UserPromptSubmit": [{"hooks": [{"type": "command",
                                      "command": "codebrain pack --stdin --quiet"}]}],
     "PreToolUse": [{"matcher": "Edit|Write|MultiEdit",
-                    "hooks": [{"type": "command", "command": "codebrain guard"}]}],
+                    "hooks": [{"type": "command", "command": "codebrain guard --stdin"}]}],
     "PostToolUse": [{"matcher": "Edit|Write|MultiEdit",
-                     "hooks": [{"type": "command", "command": "codebrain touch"}]}],
+                     "hooks": [{"type": "command", "command": "codebrain touch --stdin"}]}],
     "Stop": [{"hooks": [{"type": "command",
-                         "command": "codebrain learn --quiet"}]}],
+                         "command": "codebrain learn --stdin --quiet"}]}],
 }
 
 CLAUDE_STANZA = """\
@@ -851,6 +1040,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--brain", default=BRAIN_DIR)
     p.add_argument("--root", default=".")
     p.add_argument("--path", default=None, help="check this path instead of reading stdin")
+    p.add_argument("--stdin", action="store_true",
+                   help="read a hook payload from stdin")
     p.add_argument("--deny-guarded", action="store_true",
                    help="ask for confirmation on CODEOWNERS-guarded paths")
     p.set_defaults(func=cmd_guard)
@@ -858,6 +1049,8 @@ def build_parser() -> argparse.ArgumentParser:
     p = sub.add_parser("touch", help="note that a file was edited")
     p.add_argument("--brain", default=BRAIN_DIR)
     p.add_argument("--root", default=".")
+    p.add_argument("--stdin", action="store_true",
+                   help="read a hook payload from stdin")
     p.add_argument("--path", default=None)
     p.set_defaults(func=cmd_touch)
 
@@ -913,6 +1106,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--task", default=None)
     p.add_argument("--lesson", action="append", help="something learned (repeatable)")
     p.add_argument("--question", action="append", help="an unanswered question")
+    p.add_argument("--stdin", action="store_true",
+                   help="read a hook payload from stdin")
     p.add_argument("--outcome", choices=("success", "failure"), default=None)
     p.add_argument("--quiet", action="store_true")
     p.set_defaults(func=cmd_learn)
@@ -933,6 +1128,60 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--human", action="store_true",
                    help="overrule outright; agents may only dispute")
     p.set_defaults(func=cmd_dispute)
+
+    trial = sub.add_parser("trial", help="record and score real agent sessions")
+    trial_sub = trial.add_subparsers(dest="trial_command", required=True)
+
+    t = trial_sub.add_parser("start", help="begin recording a session")
+    t.add_argument("--trial", default="pack-vs-control")
+    t.add_argument("--session", default=None)
+    t.add_argument("--task", default=None)
+    t.add_argument("--arm", choices=("treatment", "control"), default=None,
+                   help="override assignment; only for replaying a known session")
+    t.add_argument("--split", type=float, default=0.5)
+    t.add_argument("--brain", default=BRAIN_DIR)
+    t.add_argument("--root", default=".")
+    t.add_argument("--budget", type=int, default=DEFAULT_BUDGET)
+    t.add_argument("--verify", action="store_true",
+                   help="run the repo's test command now, to detect regressions "
+                        "later (executes repository commands)")
+    t.add_argument("--timeout", type=int, default=900)
+    t.add_argument("--stdin", action="store_true",
+                   help="read a hook payload from stdin")
+    t.add_argument("--quiet", action="store_true")
+    t.set_defaults(func=cmd_trial_start)
+
+    t = trial_sub.add_parser("record", help="append an event to the active session")
+    t.add_argument("--trial", default=None)
+    t.add_argument("--session", default=None)
+    t.add_argument("--edit", default=None)
+    t.add_argument("--command", default=None)
+    t.add_argument("--exit-code", type=int, default=None, dest="exit_code")
+    t.add_argument("--note", default=None)
+    t.add_argument("--stdin", action="store_true",
+                   help="read a hook payload from stdin")
+    t.add_argument("--brain", default=BRAIN_DIR)
+    t.add_argument("--root", default=".")
+    t.set_defaults(func=cmd_trial_record)
+
+    t = trial_sub.add_parser("end", help="close a session and decide its outcome")
+    t.add_argument("--trial", default=None)
+    t.add_argument("--session", default=None)
+    t.add_argument("--outcome", choices=("success", "failure", "unknown"),
+                   default=None, help="state the outcome instead of verifying")
+    t.add_argument("--verify", action="store_true",
+                   help="run the repo's test command to decide the outcome")
+    t.add_argument("--brain", default=BRAIN_DIR)
+    t.add_argument("--root", default=".")
+    t.add_argument("--timeout", type=int, default=900)
+    t.add_argument("--quiet", action="store_true")
+    t.set_defaults(func=cmd_trial_end)
+
+    t = trial_sub.add_parser("report", help="summarise a trial")
+    t.add_argument("trial", nargs="?", default=None)
+    t.add_argument("--brain", default=BRAIN_DIR)
+    t.add_argument("--json", action="store_true")
+    t.set_defaults(func=cmd_trial_report)
 
     p = sub.add_parser("serve", help="run the MCP server on stdio")
     p.add_argument("--brain", default=BRAIN_DIR)

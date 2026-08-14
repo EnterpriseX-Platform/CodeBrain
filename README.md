@@ -33,7 +33,8 @@ back* — holds where retrieval is hard, on a small sample; see below.
 | **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
 | **P4** | L2 behavior, L3 semantics, full L6, rigorous eval | ✅ done |
 | **P5** | L7 memory, write-back, disputes, decay | ✅ done; gate met on a small sample |
-| P6 | Cortex — federation across repos | next |
+| **P5.5** | Session instrumentation — trials, arms, scoring | ✅ built; awaiting real sessions |
+| P6 | Cortex — federation across repos | |
 
 ### Measured, not asserted
 
@@ -106,6 +107,55 @@ until unrelated commits boost each other — is the thing not to do.
 codebrain eval --cases 60              # fast, leaky, good for iteration
 codebrain eval --cases 20 --rigorous   # slow, leak-free, the number to quote
 ```
+
+### Measuring what the git benchmark cannot see
+
+Both results above come from one metric — *did it name the right files* — which
+is the single facet keyword search also covers, and which saturates on small
+repositories. It cannot see whether the constraints stopped a bad edit, whether
+the verified runbook saved a guess, or whether the blast radius prevented a
+regression. Those only appear when an agent actually does the work.
+
+`codebrain trial` records real sessions and scores them:
+
+```bash
+codebrain trial start --task "add rate limiting" --verify   # assigns an arm
+# ... the agent works; hooks record edits and commands ...
+codebrain trial end --verify                                # decides the outcome
+codebrain trial report
+```
+
+```
+Trial pack-vs-control — 2 recorded session(s)
+
+                           with pack     control
+  sessions                         1           1
+  task success                  100%          0%
+  broke the build                 0%          0%
+  mean files edited              1.0         2.0
+  mean pack tokens              1023           —
+
+  NOT YET A RESULT — fewer than 10 decided sessions per arm.
+  The rates above are printed for inspection, not for quoting.
+```
+
+Three rules it is built on:
+
+**CodeBrain does not judge its own trial.** Success is the repository's own test
+command, run before and after the session. A harness scored by the system under
+test will always find that the system under test is doing well.
+
+**Arms are assigned before the work, deterministically** — a hash of trial name
+and session id, fixed at `start`. Deciding afterwards which sessions count is
+how honest people produce dishonest numbers.
+
+**A delta without an n is not a result.** Below ten decided sessions per arm the
+report says so and declines to present the comparison as a finding. A session
+whose verification never ran is `unknown` and is excluded from every rate rather
+than being quietly counted as a failure.
+
+This collects; it produces nothing until real sessions run through it. That is
+the honest cost of measuring the thing that actually matters.
 
 ---
 
@@ -477,7 +527,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-384 tests, no external test runner required.
+422 tests, no external test runner required.
 
 ---
 

@@ -255,6 +255,128 @@ class TestVerifySyncDrift(unittest.TestCase):
         self.assertEqual(code, 0)
 
 
+class TestStdinIsExplicit(unittest.TestCase):
+    """Reading stdin whenever it "is not a tty" hangs forever on an open pipe
+    with no data — and a hook that hangs freezes the session, which is worse
+    than one that errors. The hooks pass --stdin; nothing else reads."""
+
+    def test_no_flag_means_no_read(self):
+        import io
+
+        real = sys.stdin
+        sys.stdin = io.StringIO('{"prompt": "should be ignored"}')
+        try:
+            self.assertEqual(cli._hook_input(), {})
+            self.assertEqual(cli._hook_input(False), {})
+        finally:
+            sys.stdin = real
+
+    def test_the_flag_reads(self):
+        import io
+
+        real = sys.stdin
+        sys.stdin = io.StringIO('{"prompt": "read me"}')
+        try:
+            self.assertEqual(cli._hook_input(True), {"prompt": "read me"})
+        finally:
+            sys.stdin = real
+
+    def test_malformed_payload_is_not_an_error(self):
+        import io
+
+        real = sys.stdin
+        sys.stdin = io.StringIO("{not json")
+        try:
+            self.assertEqual(cli._hook_input(True), {})
+        finally:
+            sys.stdin = real
+
+    def test_generated_hooks_pass_the_flag(self):
+        wired = json.dumps(cli.HOOKS)
+        for command in ("codebrain guard", "codebrain touch", "codebrain learn"):
+            self.assertIn(f"{command} --stdin", wired)
+
+
+class TestTrialCli(unittest.TestCase):
+    def _repo(self) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "payments.py").write_text(
+            "def charge_endpoint():\n    return 1\n", encoding="utf-8")
+        run("build", str(root))
+        return root
+
+    def test_full_session_lifecycle(self):
+        root = self._repo()
+        brain = str(root / BRAIN_DIR)
+        code, _, _ = run("trial", "start", "--trial", "t", "--session", "s1",
+                         "--arm", "treatment", "--task", "fix charge_endpoint",
+                         "--brain", brain, "--root", str(root), "--quiet")
+        self.assertEqual(code, 0)
+
+        run("trial", "record", "--edit", "payments.py", "--brain", brain,
+            "--root", str(root))
+        run("trial", "record", "--command", "pytest", "--exit-code", "0",
+            "--brain", brain, "--root", str(root))
+        code, out, _ = run("trial", "end", "--outcome", "success", "--brain", brain,
+                           "--root", str(root))
+        self.assertEqual(code, 0)
+        self.assertIn("success", out)
+
+        code, report, _ = run("trial", "report", "t", "--brain", brain)
+        self.assertEqual(code, 0)
+        self.assertIn("with pack", report)
+
+    def test_a_treatment_session_gets_a_pack_and_a_control_does_not(self):
+        root = self._repo()
+        brain = str(root / BRAIN_DIR)
+        _, treated, _ = run("trial", "start", "--trial", "t", "--session", "a",
+                            "--arm", "treatment", "--task", "fix charge_endpoint",
+                            "--brain", brain, "--root", str(root))
+        _, controlled, _ = run("trial", "start", "--trial", "t", "--session", "b",
+                               "--arm", "control", "--task", "fix charge_endpoint",
+                               "--brain", brain, "--root", str(root))
+        self.assertIn("CONTEXT PACK", treated)
+        self.assertNotIn("CONTEXT PACK", controlled)
+
+    def test_touch_feeds_the_active_trial(self):
+        root = self._repo()
+        brain = str(root / BRAIN_DIR)
+        run("trial", "start", "--trial", "t", "--session", "s1", "--arm", "control",
+            "--task", "x", "--brain", brain, "--root", str(root), "--quiet")
+        run("touch", "--brain", brain, "--root", str(root), "--path", "payments.py")
+        run("trial", "end", "--outcome", "success", "--brain", brain,
+            "--root", str(root), "--quiet")
+
+        from codebrain.trial import load_traces
+        traces = load_traces(brain, "t")
+        self.assertEqual(traces[0].edits, ["payments.py"])
+
+    def test_an_unverified_session_is_unknown_not_a_success(self):
+        root = self._repo()
+        brain = str(root / BRAIN_DIR)
+        run("trial", "start", "--trial", "t", "--session", "s1", "--arm", "control",
+            "--task", "x", "--brain", brain, "--root", str(root), "--quiet")
+        run("trial", "end", "--brain", brain, "--root", str(root), "--quiet")
+
+        from codebrain.trial import UNKNOWN, load_traces
+        self.assertEqual(load_traces(brain, "t")[0].outcome, UNKNOWN)
+
+    def test_report_on_an_unknown_trial(self):
+        root = self._repo()
+        code, out, _ = run("trial", "report", "nothing-here",
+                           "--brain", str(root / BRAIN_DIR))
+        self.assertEqual(code, 0)
+        self.assertIn("No sessions recorded", out)
+
+    def test_record_without_an_active_session_is_a_no_op(self):
+        root = self._repo()
+        code, _, _ = run("trial", "record", "--edit", "payments.py",
+                         "--brain", str(root / BRAIN_DIR), "--root", str(root))
+        self.assertEqual(code, 0)
+
+
 class TestHooksFailOpen(unittest.TestCase):
     """A hook that errors breaks the user's session. Every one of these must
     exit 0 and print nothing when the Brain is unavailable."""
