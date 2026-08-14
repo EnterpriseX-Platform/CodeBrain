@@ -20,10 +20,10 @@ begins informed instead of blind.
 
 ## Status
 
-**P5 — memory and write-back.** Shipped. All eight layers now populate, and L7
-is the only one that accumulates rather than being re-derived. Its gate —
-*a second agent measurably outperforms the first because of what the first wrote
-back* — holds where retrieval is hard, on a small sample; see below.
+**P6 — Cortex.** Federation across repos: compose several already-built Brains
+at query time — composed, never re-extracted — and answer cross-repo impact
+queries with evidence. The vision's long-run gate for this phase (type-change
+propagation) is not met; what shipped is scoped honestly below.
 
 | Phase | Scope | State |
 |-------|-------|-------|
@@ -33,8 +33,8 @@ back* — holds where retrieval is hard, on a small sample; see below.
 | **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
 | **P4** | L2 behavior, L3 semantics, full L6, rigorous eval | ✅ done |
 | **P5** | L7 memory, write-back, disputes, decay | ✅ done; gate met on a small sample |
-| **P5.5** | Session instrumentation — trials, arms, scoring | ✅ built; awaiting real sessions |
-| P6 | Cortex — federation across repos | |
+| **P5.5** | Session instrumentation — trials, arms, scoring | ✅ built; validated against a real repo |
+| **P6** | Cortex — federation, cross-repo impact | ✅ shipped; type-change propagation not attempted |
 
 ### Measured, not asserted
 
@@ -107,6 +107,57 @@ until unrelated commits boost each other — is the thing not to do.
 codebrain eval --cases 60              # fast, leaky, good for iteration
 codebrain eval --cases 20 --rigorous   # slow, leak-free, the number to quote
 ```
+
+### Federation — Cortex
+
+A Brain answers questions about one repository. Real systems are systems of
+systems, and no single Brain can answer *"which other services call this
+route?"* The vision's long-run target for this phase is full type-change
+propagation — "this field's type changed, enumerate every consumer across every
+repo" — and that needs schema/type extraction this project does not have. This
+phase does not claim to meet it.
+
+What is buildable without inventing facts: compose several already-built
+Brains at query time and search each member's own source for evidence of a
+cross-repo reference.
+
+```bash
+# .codebrain-cortex.toml
+[[member]]
+name = "payments-api"
+root = "../payments-api"
+
+[[member]]
+name = "billing-worker"
+root = "../billing-worker"
+```
+
+```bash
+codebrain cortex roster
+codebrain cortex impact "POST /v1/charges"
+```
+
+```
+POST /v1/charges  -  defined in payments-api (route)
+
+billing-worker - 1 reference(s)
+  worker.py:41  requests.post(BASE + '/v1/charges', json={"amount": amount})
+
+Scanned: billing-worker
+
+This is textual matching over each member's own source, not a
+resolved import graph or a type-checked call -- a hit is evidence
+to go look at, not proof of a real dependency.
+```
+
+**Composed, never re-extracted** is the rule the whole phase turns on. Cortex
+never writes to a member Brain and never merges them into a new on-disk
+artifact — it reads whatever `codebrain build` last left in each `.brain/`
+directory. A member that has drifted is caught by *its own* drift gate; Cortex
+is not a second copy of that job. A member Brain that fails to load is kept in
+the roster with its error rather than silently dropped, because a Cortex that
+quietly ignores a broken member gives a confidently incomplete answer — worse
+than one that admits the gap.
 
 ### Measuring what the git benchmark cannot see
 
@@ -527,7 +578,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-447 tests, no external test runner required.
+471 tests, no external test runner required.
 
 ---
 

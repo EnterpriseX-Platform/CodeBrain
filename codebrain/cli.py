@@ -787,6 +787,28 @@ def cmd_trial_report(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_cortex_roster(args: argparse.Namespace) -> int:
+    from .cortex import CONFIG_FILE, load_cortex, render_roster
+
+    config = Path(args.config) if args.config else Path.cwd() / CONFIG_FILE
+    cortex = load_cortex(config)
+    print(render_roster(cortex))
+    return 1 if (args.check and cortex.failed) else 0
+
+
+def cmd_cortex_impact(args: argparse.Namespace) -> int:
+    from .cortex import CONFIG_FILE, cross_repo_impact, load_cortex, render_impact
+
+    config = Path(args.config) if args.config else Path.cwd() / CONFIG_FILE
+    cortex = load_cortex(config)
+    if not cortex.members:
+        print(f"codebrain: no members configured in {config}", file=sys.stderr)
+        return 2
+    report = cross_repo_impact(cortex, args.target)
+    print(render_impact(report))
+    return 0
+
+
 def cmd_serve(args: argparse.Namespace) -> int:
     from .mcp_server import serve
 
@@ -1182,6 +1204,21 @@ def build_parser() -> argparse.ArgumentParser:
     t.add_argument("--brain", default=BRAIN_DIR)
     t.add_argument("--json", action="store_true")
     t.set_defaults(func=cmd_trial_report)
+
+    cortex = sub.add_parser("cortex", help="query across several members' Brains")
+    cortex_sub = cortex.add_subparsers(dest="cortex_command", required=True)
+
+    c = cortex_sub.add_parser("roster", help="list configured members and load status")
+    c.add_argument("--config", default=None, help="defaults to ./.codebrain-cortex.toml")
+    c.add_argument("--check", action="store_true",
+                   help="exit non-zero if any member failed to load")
+    c.set_defaults(func=cmd_cortex_roster)
+
+    c = cortex_sub.add_parser("impact", help="find cross-repo references to a "
+                                             "route or symbol")
+    c.add_argument("target", help='e.g. "POST /v1/charges" or a symbol name')
+    c.add_argument("--config", default=None)
+    c.set_defaults(func=cmd_cortex_impact)
 
     p = sub.add_parser("serve", help="run the MCP server on stdio")
     p.add_argument("--brain", default=BRAIN_DIR)
