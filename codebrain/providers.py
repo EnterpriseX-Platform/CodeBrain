@@ -111,6 +111,10 @@ class Provider(ABC):
     #: Providers with lower order run first, so later ones can rely on earlier
     #: nodes existing (edges need their endpoints).
     order: int = 100
+    #: True when `applies` inspects `ctx.brain` rather than the filesystem. Such
+    #: a provider cannot be asked whether it applies before the build starts,
+    #: because the answer depends on what earlier providers found.
+    derivative: bool = False
 
     def applies(self, ctx: BuildContext) -> bool:
         return True
@@ -178,7 +182,11 @@ def build(ctx: BuildContext, providers: Iterable[Provider] | None = None) -> Bui
     # build entirely.
     brain = new_brain(repo=ctx.repo, as_of=ctx.commit, branch=ctx.branch)
     ctx.brain = brain
-    chosen = list(providers) if providers is not None else REGISTRY.applicable(ctx)
+    # Every registered provider is a candidate; `applies` is asked inside the
+    # loop, when that provider's turn actually comes. Filtering up front asks a
+    # derivative provider whether it applies against an empty Brain, which it
+    # never does — that silently dropped L6 once and L3 again.
+    chosen = list(providers) if providers is not None else REGISTRY.all()
     result = BuildResult(brain=brain, report=MergeReport())
 
     for provider in sorted(chosen, key=lambda p: (p.order, p.id)):

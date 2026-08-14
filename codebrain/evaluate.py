@@ -10,12 +10,15 @@ answer is already known — the files that commit changed.
     prediction    the files a context pack surfaces for that task
     baseline      the files a keyword search surfaces for the same task
 
-The honest limitation, stated in the report rather than buried: the Brain is
-built from HEAD, so it has seen the finished state of the code these commits
-produced. That inflates both arms — the pack *and* the baseline read the same
-post-change repository — so the comparison between them stays fair while the
-absolute numbers read high. Building a Brain per commit is the rigorous version
-and belongs with the verification work in P3.
+Two modes. The fast one builds a single Brain from HEAD, which has therefore
+seen the finished state of the code these commits produced. That inflates both
+arms — the pack *and* the baseline read the same post-change repository — so the
+comparison stays fair while the absolute numbers read high.
+
+`--rigorous` removes the leakage: each case gets its own Brain, built from that
+commit's parent in a detached worktree, so nothing in it can know the answer. It
+costs a full extraction per case, which is why it is opt-in rather than the
+default — but it is the number to quote.
 """
 
 from __future__ import annotations
@@ -25,7 +28,16 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Iterable
 
-from .gitutil import REC, REC_FMT, SEP, SEP_FMT, git, is_repo, normalise_rename
+from .gitutil import (
+    REC,
+    REC_FMT,
+    SEP,
+    SEP_FMT,
+    git,
+    git_stripped,
+    is_repo,
+    normalise_rename,
+)
 from .model import Brain
 from .pack import compile_pack, is_test_path, tokenize
 
@@ -265,7 +277,7 @@ def run(brain: Brain, root: Path, cases: list[Case], budget: int = 6000) -> Repo
     return report
 
 
-def render(report: Report, verbose: bool = False) -> str:
+def render(report: Report, verbose: bool = False, rigorous: bool = False) -> str:
     if not report.n:
         return ("No usable evaluation cases. This needs a repository with git "
                 "history whose commit subjects carry at least two meaningful words.")
@@ -291,18 +303,92 @@ def render(report: Report, verbose: bool = False) -> str:
             lines.append(f"  {subject}  {result.pack_recall:>5.0%}   "
                          f"{result.grep_recall:>5.0%}")
 
-    lines += [
-        "",
-        "Caveat: the Brain is built from HEAD, so it has seen the finished state",
-        "of the code these commits produced. Both arms read the same post-change",
-        "repository, so the comparison is fair, but absolute recall reads high.",
-        "Per-commit Brains are the rigorous version and land with P3.",
-    ]
+    if rigorous:
+        lines += [
+            "",
+            "Each case used a Brain built from that commit's parent, in a detached",
+            "worktree. Nothing in it had seen the change being asked about, so",
+            "these numbers carry no leakage — and read lower than the fast mode's",
+            "for exactly that reason.",
+        ]
+    else:
+        lines += [
+            "",
+            "Caveat: the Brain is built from HEAD, so it has seen the finished state",
+            "of the code these commits produced. Both arms read the same post-change",
+            "repository, so the comparison is fair, but absolute recall reads high.",
+            "Run with --rigorous for a Brain per commit that cannot know the answer.",
+        ]
     return "\n".join(lines)
 
 
+def run_rigorous(root: Path, cases: list[Case], budget: int = 6000,
+                 log=None) -> Report:
+    """The honest version: a Brain per commit, built from that commit's parent.
+
+    The fast benchmark builds one Brain from HEAD, so it has already seen the
+    finished state of the code these commits produced. Here each case gets a
+    Brain that has not: a detached worktree is checked out at `sha^`, extracted,
+    and asked the task. Nothing in it can know the answer.
+
+    Slow — a full extraction per case — so it is opt-in. Worktrees are always
+    removed, including when a case fails, and none of this touches the caller's
+    working tree.
+    """
+    import shutil
+    import tempfile
+
+    from .providers import BuildContext
+    from .providers import build as run_build
+
+    report = Report()
+    for index, case in enumerate(cases):
+        parent = git_stripped(root, "rev-parse", f"{case.sha}^")
+        if not parent:
+            report.skipped += 1  # a root commit has no "before"
+            continue
+
+        workdir = Path(tempfile.mkdtemp(prefix="codebrain-eval-"))
+        checkout = workdir / "tree"
+        try:
+            added = git(root, "worktree", "add", "--detach", str(checkout), parent)
+            if added is None:
+                report.skipped += 1
+                continue
+
+            ctx = BuildContext(root=checkout, commit=parent)
+            past = run_build(ctx).brain
+
+            predicted, tokens = pack_prediction(past, case.subject, budget,
+                                                root=checkout)
+            if not predicted:
+                report.skipped += 1
+                continue
+
+            k = min(len(predicted), 25)
+            corpus = [p for p in ctx.iter_files() if ctx.readable(p)]
+            baseline = grep_prediction(checkout, case.subject, corpus, k)
+            report.results.append(CaseResult(
+                case=case, pack_files=predicted[:k], grep_files=baseline,
+                pack_recall=recall(predicted, case.changed, k),
+                grep_recall=recall(baseline, case.changed, k),
+                tokens=tokens, k=k,
+            ))
+            if log:
+                log(f"  [{index + 1}/{len(cases)}] {case.subject[:48]}")
+        finally:
+            git(root, "worktree", "remove", "--force", str(checkout))
+            shutil.rmtree(workdir, ignore_errors=True)
+
+    return report
+
+
 def evaluate(brain: Brain, root: Path, limit: int = DEFAULT_CASES,
-             skip: int = 0, budget: int = 6000) -> Report:
+             skip: int = 0, budget: int = 6000, rigorous: bool = False,
+             log=None) -> Report:
     if not is_repo(root):
         return Report()
-    return run(brain, root, collect_cases(root, limit, skip), budget)
+    cases = collect_cases(root, limit, skip)
+    if rigorous:
+        return run_rigorous(root, cases, budget, log=log)
+    return run(brain, root, cases, budget)

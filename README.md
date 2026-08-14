@@ -20,9 +20,8 @@ begins informed instead of blind.
 
 ## Status
 
-**P3 — verification by execution.** Complete. Claims are no longer taken on
-trust: CodeBrain runs the commands it extracted and records what happened. This
-is the line between a Brain and documentation.
+**P4 — semantics, behavior and constraints.** Complete. All eight layers are
+populated, every one of them offline and deterministic.
 
 | Phase | Scope | State |
 |-------|-------|-------|
@@ -30,8 +29,8 @@ is the line between a Brain and documentation.
 | **P1** | Deterministic core — L0/L1/L4/L5 extractors, Atlas | ✅ done |
 | **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ✅ done |
 | **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
-| P4 | Semantics and behavior — L2/L3, full L6 | next |
-| P5 | Memory and agent write-back | |
+| **P4** | L2 behavior, L3 semantics, full L6, rigorous eval | ✅ done |
+| P5 | Memory and agent write-back | next |
 | P6 | Cortex — federation across repos | |
 
 ### Measured, not asserted
@@ -59,6 +58,16 @@ Run it yourself:
 
 ```bash
 codebrain eval --cases 60 --verbose
+```
+
+Those numbers carry a known leak: the Brain is built from HEAD, so it has seen
+the finished state of the code these commits produced. `--rigorous` removes it —
+each case gets its own Brain, built from that commit's *parent* in a detached
+worktree, so nothing in it can know the answer. It costs a full extraction per
+case, which is why it is opt-in rather than the default:
+
+```bash
+codebrain eval --cases 20 --rigorous
 ```
 
 ---
@@ -124,7 +133,9 @@ Every command takes the Brain path positionally or as `--brain`.
 | `structure-py` | L1 | Python AST | modules, symbols, imports, resolved call graph |
 | `structure-ts` | L1 | TS/JS scanner | modules, declarations, import graph |
 | `operations` | L5 | manifests, Make, CI, Docker | build/test/run commands, pipelines, CODEOWNERS |
-| `constraints` | L6 | the Brain itself | required reviewers, danger zones, bus-factor risk |
+| `behavior` | L2 | AST decorators, imports | routes, entrypoints, jobs, env vars, data stores |
+| `semantics` | L3 | the Brain itself | bounded-context candidates, ubiquitous language, entities |
+| `constraints` | L6 | the Brain + `.codebrain.toml` | reviewers, danger zones, public contracts, untested churn, policy zones |
 
 Two extractors overlap on purpose. `census` guesses the repo name from the
 directory (`DERIVED` 0.5); `gitmeta` reads it from the remote (`EXTRACTED`
@@ -177,6 +188,44 @@ does — so this is a tested contract, not an aspiration.
 `guard` warns by default and never blocks. Denying an edit on inferred evidence
 would get the hook removed; hard gates wait for real compliance zones in P4, and
 are opt-in via `--deny-guarded` until then.
+
+## Semantics without a language model
+
+L3 is the layer people expect an LLM to write, and the temptation is to have one
+narrate the domain and call the result knowledge. That would be expensive on
+every build and would produce confident prose nobody can check.
+
+So the part that *is* derivable is derived. Bounded contexts come from import
+cohesion — a directory whose modules import each other far more than they import
+outward **is** a boundary, whatever anyone calls it. Ubiquitous language comes
+from the vocabulary the code actually uses, weighted by how widely each term is
+shared. On this repository that yields `extract, provider, applies, brain, pack,
+report, constraints` — which is, in fact, what this codebase is about.
+
+What is left — business rules, entity relationships, *why* a boundary sits where
+it does — needs a model, and the provider says so in a `semantics_coverage_gap`
+fact rather than leaving the absence to be mistaken for "this repository has no
+domain". An LLM-backed provider can register alongside it; its claims will be
+`INFERRED`, ranked below these, and overridden by any human who disagrees.
+
+## Declared policy
+
+Everything in L6 is inferred from evidence except one thing. A team can state a
+constraint outright in `.codebrain.toml`:
+
+```toml
+[[zone]]
+name = "pci"
+paths = ["payments/", "src/billing/"]
+reason = "PCI scope — cardholder data"
+requires = ["@risk-eng"]
+block_agents = true
+```
+
+These are `ASSERTED`, so they outrank anything the machinery derives, and they
+are the **only** constraint permitted to stop an agent. Inferred constraints —
+churn, bus factor, missing tests — warn and never block, because denying an edit
+on a guess gets the hook uninstalled by lunchtime.
 
 ## Verification — claims are executable
 
@@ -354,7 +403,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-301 tests, no external test runner required.
+344 tests, no external test runner required.
 
 ---
 

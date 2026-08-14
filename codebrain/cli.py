@@ -316,6 +316,22 @@ def cmd_guard(args: argparse.Namespace) -> int:
     file_id = f"{Layer.L0}:file:{rel}"
     reasons: list[str] = []
     blocking = False
+    declared_block = False
+
+    # A policy zone is the one constraint a human stated outright rather than
+    # the machinery inferring it, so it is the only one allowed to stop an edit
+    # on its own. Everything else warns.
+    zone = brain.fact(file_id, "policy_zone", Layer.L6)
+    if zone:
+        value = zone.value or {}
+        detail = f"{rel} is in the '{value.get('zone')}' policy zone"
+        if value.get("reason"):
+            detail += f" — {value['reason']}"
+        if value.get("requires"):
+            detail += f" (requires {', '.join(value['requires'])})"
+        reasons.append(detail)
+        blocking = True
+        declared_block = bool(value.get("block_agents"))
 
     review = brain.fact(file_id, "requires_review", Layer.L6)
     if review:
@@ -334,13 +350,25 @@ def cmd_guard(args: argparse.Namespace) -> int:
         reasons.append(f"{rel} has only ever been changed by "
                        f"{(bus.value or {}).get('primary_author')}")
 
+    untested = brain.fact(file_id, "untested_churn", Layer.L6)
+    if untested:
+        value = untested.value or {}
+        reasons.append(f"{rel} changes often ({value.get('commits')} commits) and "
+                       "no test reaches it — a mistake here fails silently")
+
     if not reasons:
         return 0
 
-    # Warn, do not block, unless the operator asked for a hard gate. Denying an
-    # edit on churn alone would be obnoxious and would get the hook removed;
-    # real compliance zones arrive with L6 proper in P4.
-    decision = "ask" if (blocking and args.deny_guarded) else "allow"
+    # Inferred constraints warn; they never block, because denying an edit on
+    # churn would get the hook uninstalled by lunchtime. A policy zone a human
+    # declared with block_agents is different: that is a stated decision, and
+    # it is the only thing here allowed to stop an edit on its own.
+    if declared_block:
+        decision = "deny"
+    elif blocking and args.deny_guarded:
+        decision = "ask"
+    else:
+        decision = "allow"
     print(json.dumps({"hookSpecificOutput": {
         "hookEventName": "PreToolUse",
         "permissionDecision": decision,
@@ -460,9 +488,13 @@ def cmd_eval(args: argparse.Namespace) -> int:
         print(f"codebrain: {exc}", file=sys.stderr)
         return 2
 
+    if args.rigorous:
+        print(f"Building a Brain per commit (up to {args.cases}) "
+              "— this is slow by design.")
     report = evaluate(brain, Path(args.root), limit=args.cases, skip=args.skip,
-                      budget=args.budget)
-    print(render_eval(report, verbose=args.verbose))
+                      budget=args.budget, rigorous=args.rigorous,
+                      log=print if args.verbose else None)
+    print(render_eval(report, verbose=args.verbose, rigorous=args.rigorous))
     if not report.n:
         return 0
     # A pack that does not beat plain search has not earned its place in the
@@ -502,7 +534,9 @@ def cmd_providers(args: argparse.Namespace) -> int:
     ctx = _context(root) if root.is_dir() else None
     for p in REGISTRY.all():
         state = ""
-        if ctx is not None:
+        if p.derivative:
+            state = "  decided during the build (reads earlier layers)"
+        elif ctx is not None:
             state = "  applies" if p.applies(ctx) else "  does not apply here"
         layers = " ".join(str(l) for l in p.layers)
         print(f"  {p.id:<12} {layers:<8}{state}")
@@ -766,6 +800,9 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--skip", type=int, default=0)
     p.add_argument("--budget", type=int, default=DEFAULT_BUDGET)
     p.add_argument("--verbose", action="store_true")
+    p.add_argument("--rigorous", action="store_true",
+                   help="build a Brain per commit from its parent, so the "
+                        "Brain cannot have seen the answer (slow)")
     p.add_argument("--check", action="store_true",
                    help="exit non-zero if packs do not beat keyword search")
     p.set_defaults(func=cmd_eval)
