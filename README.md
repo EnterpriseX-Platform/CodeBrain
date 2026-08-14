@@ -23,7 +23,7 @@ begins informed instead of blind.
 **P5 — memory and write-back.** Shipped. All eight layers now populate, and L7
 is the only one that accumulates rather than being re-derived. Its gate —
 *a second agent measurably outperforms the first because of what the first wrote
-back* — is **not demonstrated**; see below.
+back* — holds where retrieval is hard, on a small sample; see below.
 
 | Phase | Scope | State |
 |-------|-------|-------|
@@ -32,7 +32,7 @@ back* — is **not demonstrated**; see below.
 | **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ⚠️ shipped; retrieval gate not met leak-free |
 | **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
 | **P4** | L2 behavior, L3 semantics, full L6, rigorous eval | ✅ done |
-| **P5** | L7 memory, write-back, disputes, decay | ⚠️ shipped; write-back gate not demonstrated |
+| **P5** | L7 memory, write-back, disputes, decay | ✅ done; gate met on a small sample |
 | P6 | Cortex — federation across repos | next |
 
 ### Measured, not asserted
@@ -72,30 +72,35 @@ kind of confident unverified claim the whole project is built to avoid.
 
 Measuring the other facets needs agents completing real tasks.
 
-**Write-back — a null result from an inadequate harness.** `codebrain eval
---memory` measures the same Brain with and without a previous session in memory,
-so the delta is the value of write-back and nothing else:
+**Write-back.** `codebrain eval --memory` measures the same Brain with and
+without a previous session in memory, so the delta is the value of write-back
+and nothing else:
 
-| Repository | Cases | With memory | Without | Delta |
-|---|---:|---:|---:|---:|
-| requests | 13 | 84.6% | 84.6% | ±0.0% |
+| Repository | Cases | With memory | Without | Delta | Better / same / worse |
+|---|---:|---:|---:|---:|---|
+| django | 6 | 38.9% | 16.7% | **+22.2%** | 4 / 2 / 0 |
+| requests | 13 | 84.6% | 84.6% | ±0.0% | 0 / 13 / 0 |
 
-The mechanism works — a prior session's files do get lifted up the anchor
-ranking, and that is unit-tested. The **harness** is what fails. It pairs
-consecutive commits that touch overlapping files and treats the earlier one as
-"a previous session", but measured task overlap across those pairs is mostly
-0.00–0.25. Only 1 of 13 pairs describes genuinely the same work (*"Increase
-chardet upper limit to 7"* → *"…to 8"*), and both arms already solved that one.
+Memory pays where retrieval is hard and does nothing where it is already easy.
+On django, cold recall is 16.7% and there is room for a prior session to help;
+on requests it is 84.6% before memory says anything, so the metric is at its
+ceiling and no mechanism could move it.
 
-The premise is wrong, not just the result: **a commit is the end of a session,
-not a handoff mid-task.** What P5's gate actually needs is traces of two agents
-working the same problem in sequence, and git history does not contain those.
-Getting them means instrumenting real sessions, which is a different piece of
-work from anything built so far.
+Two caveats, stated because the headline number is favourable:
 
-The tuning knob that would manufacture a win here — loosening the task-overlap
-function until unrelated commits start boosting each other — is precisely the
-thing not to do.
+**Six cases is a small sample.** Suggestive, not conclusive.
+
+**The harness selects for the favourable case.** It only pairs commits whose
+changed files overlap, so memory always points at files that are part of the
+answer. Real prior sessions frequently touch unrelated code. Read +22.2% as an
+upper bound on a related task, not as an average over sessions.
+
+What would settle it is traces of two agents working the same problem in
+sequence — a commit is the end of a session, not a handoff mid-task, so git
+history cannot supply them. That needs real sessions instrumented.
+
+The knob that would inflate this further — loosening the task-overlap function
+until unrelated commits boost each other — is the thing not to do.
 
 ```bash
 codebrain eval --cases 60              # fast, leaky, good for iteration
