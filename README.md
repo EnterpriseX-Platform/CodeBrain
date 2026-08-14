@@ -291,7 +291,7 @@ Every command takes the Brain path positionally or as `--brain`.
 | `structure-py` | L1 | Python AST | modules, symbols, imports, resolved call graph |
 | `structure-ts` | L1 | TS/JS scanner | modules, declarations, import graph |
 | `operations` | L5 | manifests, Cargo.toml, Make, CI, Docker | build/test/run commands, pipelines, CODEOWNERS |
-| `behavior` | L2 | AST decorators, imports | routes, entrypoints, jobs, env vars, data stores |
+| `behavior` | L2 | AST decorators/urlpatterns, file-based routes, imports | routes (Flask/FastAPI, Django, Next.js App Router, express), entrypoints, jobs, env vars, data stores |
 | `semantics` | L3 | the Brain itself | bounded-context candidates, ubiquitous language, entities |
 | `constraints` | L6 | the Brain + `.codebrain.toml` | reviewers, danger zones, public contracts, untested churn, policy zones |
 
@@ -598,7 +598,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-481 tests, no external test runner required.
+491 tests, no external test runner required.
 
 ---
 
