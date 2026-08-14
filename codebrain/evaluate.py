@@ -54,9 +54,18 @@ DEFAULT_CASES = 40
 #: engineering intent to retrieve — "Bump the actions group with 2 updates"
 #: describes no behaviour and names no code — so they measure nothing about
 #: either arm. Excluded as a stated rule, not tuned away case by case.
+#:
+#: The image/version-bump patterns were added after a real run surfaced them:
+#: "chore: bump image to qa-20260814k" is the same zero-signal problem as a
+#: dependency bump — a mechanical tag increment, not described engineering
+#: work — just a phrasing the original dependency-bot patterns did not cover
+#: because it never starts the subject with the literal word "bump".
 AUTOMATED = re.compile(
     r"^(bump\b|chore\(deps|build\(deps|update dependenc|merge (pull request|branch)\b"
-    r"|\[?(pre-commit\.ci|dependabot|renovate)\b)|\[bot\]|\bdependabot\b",
+    r"|\[?(pre-commit\.ci|dependabot|renovate)\b"
+    r"|(chore|deploy|build|release):\s*bump\b)"
+    r"|\bbump\s+(prod\s+)?(image|version)\b"
+    r"|\[bot\]|\bdependabot\b",
     re.IGNORECASE,
 )
 

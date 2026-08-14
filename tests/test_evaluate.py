@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
 
 from codebrain.envelope import Envelope, Evidence, Method
 from codebrain.evaluate import (
@@ -41,6 +42,21 @@ class TestAutomatedFilter(unittest.TestCase):
 
     def test_bumper_named_in_a_real_subject_is_not_over_matched(self):
         self.assertFalse(is_automated("Fix crash when the bumper cache is cold"))
+
+    def test_deploy_image_tag_bumps_are_excluded(self):
+        # Same zero-signal problem as a dependency bump — a mechanical tag
+        # increment, not described engineering work — just phrased differently.
+        for subject in (
+            "chore: bump image to qa-20260814k",
+            "deploy: bump prod image to qa-20260814i — session revocation",
+            "chore: bump version to 1.2.7",
+            "build: bump version to 2.0.0-rc1",
+        ):
+            self.assertTrue(is_automated(subject), subject)
+
+    def test_a_real_fix_mentioning_a_version_number_is_not_excluded(self):
+        self.assertFalse(is_automated("Fix version comparison off-by-one in the "
+                                      "upgrade checker"))
 
 
 class TestRecall(unittest.TestCase):
@@ -116,14 +132,19 @@ class TestRigorousSetup(unittest.TestCase):
         """The registry is populated by importing codebrain.extractors. When
         run_rigorous relied on the caller having done that, every worktree Brain
         came out empty and every case was reported "skipped" — a silent nothing
-        that reads exactly like a real result."""
-        import importlib
+        that reads exactly like a real result.
 
-        import codebrain.evaluate as ev
-        importlib.reload(ev)
+        Calls the real function rather than reloading an unrelated module: the
+        previous version of this test only passed because some *other* test
+        module happened to import codebrain.extractors first when the suite
+        runs as a whole, and silently failed to test anything when this file
+        ran on its own — a false pass, exactly the kind of silent nothing the
+        fix itself was written to catch.
+        """
+        from codebrain.evaluate import run_rigorous
         from codebrain.providers import REGISTRY
 
-        # Simulate a caller that never imported the extractors package.
+        run_rigorous(Path("."), [], 6000)  # empty cases: only the import runs
         self.assertGreater(len(REGISTRY), 0)
         self.assertIn("census", [p.id for p in REGISTRY.all()])
 
