@@ -33,7 +33,7 @@ propagation) is not met; what shipped is scoped honestly below.
 | **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
 | **P4** | L2 behavior, L3 semantics, full L6, rigorous eval | ✅ done |
 | **P5** | L7 memory, write-back, disputes, decay | ✅ done; gate met on a small sample |
-| **P5.5** | Session instrumentation — trials, arms, scoring | ✅ built; validated against a real repo |
+| **P5.5** | Session instrumentation — trials, arms, scoring | ✅ built; mechanics proven on one real session (n=1) |
 | **P6** | Cortex — federation, cross-repo impact | ✅ shipped; type-change propagation not attempted |
 
 ### Measured, not asserted
