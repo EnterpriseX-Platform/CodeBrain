@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import io
 import json
+import subprocess
 import sys
 import tempfile
 import unittest
@@ -140,6 +141,118 @@ class TestCliEndToEnd(unittest.TestCase):
         code, _, err = run("build", "/definitely/not/here")
         self.assertEqual(code, 2)
         self.assertIn("not a directory", err)
+
+
+class TestBrainPathSpellings(unittest.TestCase):
+    """Half the commands took the Brain path positionally and half as --brain.
+    Both spellings work now, everywhere."""
+
+    def test_status_accepts_both(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp)
+            run("build", str(root))
+            brain = str(root / BRAIN_DIR)
+            positional, _, _ = run("status", brain, "--json")
+            keyword, _, _ = run("status", "--brain", brain, "--json")
+        self.assertEqual((positional, keyword), (0, 0))
+
+    def test_validate_and_atlas_accept_keyword_form(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = make_repo(tmp)
+            run("build", str(root))
+            brain = str(root / BRAIN_DIR)
+            self.assertEqual(run("validate", "--brain", brain)[0], 0)
+            self.assertEqual(run("atlas", "--brain", brain, "--out", "-")[0], 0)
+
+
+class TestVerifySyncDrift(unittest.TestCase):
+    # sync and drift are defined relative to HEAD, so these fixtures must be
+    # real git repositories or the commands can only ever say "cannot tell".
+    TASK = "change charge_endpoint in payments.py"
+
+    def _repo(self, test_recipe: str | None = None) -> Path:
+        tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name)
+        (root / "payments.py").write_text(
+            "def charge_endpoint():\n    return 1\n", encoding="utf-8")
+        recipe = test_recipe or f'"{sys.executable}" -c "pass"'
+        (root / "Makefile").write_text(f"test:\n\t{recipe}\n", encoding="utf-8")
+        for args in (("init", "-b", "main"),
+                     ("config", "user.email", "t@example.com"),
+                     ("config", "user.name", "T"),
+                     ("add", "-A"),
+                     ("-c", "commit.gpgsign=false", "commit", "-m", "initial")):
+            subprocess.run(("git", *args), cwd=str(root), capture_output=True,
+                           timeout=30)
+        run("build", str(root))
+        return root
+
+    def test_verify_is_a_dry_run_by_default(self):
+        root = self._repo()
+        code, out, _ = run("verify", "--brain", str(root / BRAIN_DIR),
+                           "--root", str(root))
+        self.assertEqual(code, 0)
+        self.assertIn("Dry run", out)
+        self.assertIn("--yes", out)
+
+    def test_verify_yes_promotes_and_persists(self):
+        root = self._repo()
+        brain_dir = str(root / BRAIN_DIR)
+        code, out, _ = run("verify", "--brain", brain_dir, "--root", str(root), "--yes")
+        self.assertEqual(code, 0)
+        self.assertTrue("promoted" in out or "refuted" in out)
+        # Reload from disk: the verdict must have been saved, not just held.
+        _, packed, _ = run("pack", self.TASK, "--brain", brain_dir, "--root", str(root))
+        self.assertNotIn("never executed", packed)
+        self.assertTrue("OBSERVED" in packed or "REFUTED" in packed)
+
+    def test_verify_check_fails_on_a_refuted_claim(self):
+        root = self._repo(f'"{sys.executable}" -c "import sys; sys.exit(1)"')
+        code, out, _ = run("verify", "--brain", str(root / BRAIN_DIR),
+                           "--root", str(root), "--yes", "--check")
+        self.assertEqual(code, 1)
+        self.assertIn("refuted", out)
+
+    def test_sync_reports_up_to_date_when_nothing_moved(self):
+        root = self._repo()
+        code, out, _ = run("sync", "--brain", str(root / BRAIN_DIR), "--root", str(root))
+        self.assertEqual(code, 0)
+        self.assertIn("Up to date", out)
+
+    def test_sync_carries_a_verification_forward(self):
+        root = self._repo()
+        brain_dir = str(root / BRAIN_DIR)
+        run("verify", "--brain", brain_dir, "--root", str(root), "--yes")
+        code, out, _ = run("sync", "--brain", brain_dir, "--root", str(root), "--force")
+        self.assertEqual(code, 0)
+        self.assertIn("carried forward", out)
+        _, packed, _ = run("pack", self.TASK, "--brain", brain_dir,
+                           "--root", str(root))
+        self.assertNotIn("never executed", packed)
+
+    def test_drift_is_clean_right_after_a_build(self):
+        root = self._repo()
+        code, out, _ = run("drift", "--brain", str(root / BRAIN_DIR),
+                           "--root", str(root), "--check")
+        self.assertEqual(code, 0)
+        self.assertIn("No drift", out)
+
+    def test_drift_check_fails_once_the_code_moves(self):
+        root = self._repo()
+        (root / "a.py").write_text("def f():\n    return 1\n\ndef g():\n    return 2\n",
+                                   encoding="utf-8")
+        code, out, _ = run("drift", "--brain", str(root / BRAIN_DIR),
+                           "--root", str(root), "--check")
+        self.assertEqual(code, 1)
+        self.assertIn("DRIFT", out)
+        self.assertIn("codebrain sync", out)
+
+    def test_drift_without_check_reports_but_succeeds(self):
+        root = self._repo()
+        (root / "b.py").write_text("def h():\n    return 3\n", encoding="utf-8")
+        code, _, _ = run("drift", "--brain", str(root / BRAIN_DIR), "--root", str(root))
+        self.assertEqual(code, 0)
 
 
 class TestHooksFailOpen(unittest.TestCase):

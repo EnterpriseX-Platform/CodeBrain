@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Any, Callable
 
 from . import __version__
-from .envelope import Method
+from .envelope import Method, Status
 from .model import REPO, Layer
 from .pack import DEFAULT_BUDGET, brief, compile_pack, provenance_tag, tokenize
 from .store import BrainNotFound, apply_touched, load, read_touched
@@ -227,8 +227,12 @@ class Server:
             found = brain.fact(REPO, f"{intent}_command", Layer.L5)
             if found is None:
                 continue
-            caveat = ("" if found.env.method is Method.OBSERVED
-                      else "  — inferred, never executed by CodeBrain")
+            if found.env.status is Status.REFUTED:
+                caveat = "  — CodeBrain ran this and it FAILED; do not rely on it"
+            elif found.env.method is Method.OBSERVED:
+                caveat = ""
+            else:
+                caveat = "  — inferred, never executed by CodeBrain"
             lines.append(f"{intent:<6} {found.value}  "
                          f"[{provenance_tag(found.env)}]{caveat}")
         if not lines:

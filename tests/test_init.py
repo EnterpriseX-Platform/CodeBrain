@@ -4,7 +4,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 from codebrain import cli
@@ -99,7 +99,11 @@ class TestInit(unittest.TestCase):
         self.assertTrue((self.root / ".brain").is_dir())
 
     def test_missing_directory_is_an_error(self):
-        self.assertEqual(cli.main(["init", str(self.root / "nope")]), 2)
+        err = io.StringIO()
+        with redirect_stderr(err):
+            code = cli.main(["init", str(self.root / "nope")])
+        self.assertEqual(code, 2)
+        self.assertIn("not a directory", err.getvalue())
 
 
 if __name__ == "__main__":

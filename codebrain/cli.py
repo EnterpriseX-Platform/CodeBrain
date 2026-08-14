@@ -147,6 +147,7 @@ def cmd_build(args: argparse.Namespace) -> int:
 
 
 def cmd_status(args: argparse.Namespace) -> int:
+    args.brain = _resolve_brain(args)
     try:
         brain = load(args.brain)
     except BrainNotFound as exc:
@@ -184,6 +185,7 @@ def cmd_status(args: argparse.Namespace) -> int:
 
 
 def cmd_validate(args: argparse.Namespace) -> int:
+    args.brain = _resolve_brain(args)
     try:
         brain = load(args.brain)
     except (BrainNotFound, ValueError) as exc:
@@ -369,6 +371,86 @@ def cmd_touch(args: argparse.Namespace) -> int:
     return 0
 
 
+def cmd_verify(args: argparse.Namespace) -> int:
+    from .verify import VERIFIABLE_INTENTS, render as render_verify, verify
+
+    try:
+        brain = load(args.brain)
+    except (BrainNotFound, ValueError) as exc:
+        print(f"codebrain: {exc}", file=sys.stderr)
+        return 2
+
+    intents = args.intent or list(VERIFIABLE_INTENTS)
+    report = verify(brain, Path(args.root), intents=intents, timeout=args.timeout,
+                    execute_commands=args.yes, commit=brain.manifest.as_of)
+    print(render_verify(report))
+
+    if args.yes and (report.promoted or report.refuted):
+        save(brain, args.brain)
+        atlas = Path(args.brain) / "ATLAS.md"
+        atlas.write_text(render_atlas(brain), encoding="utf-8", newline="\n")
+    # A refuted claim is a finding, not a crash: report it, and let CI decide.
+    return 1 if (args.check and report.failed) else 0
+
+
+def cmd_sync(args: argparse.Namespace) -> int:
+    from .sync import SyncReport, carry_forward, needs_rebuild
+
+    brain_dir = Path(args.brain)
+    root = Path(args.root)
+    try:
+        previous = load(brain_dir)
+    except (BrainNotFound, ValueError):
+        print("No Brain yet — running a full build.")
+        return cmd_build(argparse.Namespace(root=args.root, out=args.brain, only=None))
+
+    rebuild, reason, changed = needs_rebuild(previous, root, brain_dir)
+    if not rebuild and not args.force:
+        print(SyncReport(rebuilt=False, reason=reason, changed=changed).render())
+        return 0
+    # Past this point we are definitely rebuilding, so the report must say so —
+    # a forced sync that reports "up to date" describes the opposite of what
+    # just happened.
+    report = SyncReport(rebuilt=True, changed=changed,
+                        reason=reason if rebuild else "forced")
+
+    result = run_build(_context(root))
+    report.carried, report.invalidated = carry_forward(previous, result.brain)
+    report.delta = diff_brains(previous, result.brain)
+    save(result.brain, brain_dir)
+    (brain_dir / "ATLAS.md").write_text(render_atlas(result.brain),
+                                        encoding="utf-8", newline="\n")
+    clear_touched(brain_dir)
+    print(report.render())
+    return 1 if result.failed else 0
+
+
+def cmd_drift(args: argparse.Namespace) -> int:
+    from .sync import drift
+
+    try:
+        committed = load(args.brain)
+    except (BrainNotFound, ValueError) as exc:
+        print(f"codebrain: {exc}", file=sys.stderr)
+        return 2
+
+    fresh = run_build(_context(Path(args.root))).brain
+    delta = drift(committed, fresh)
+
+    if not delta.substantive:
+        print(f"No drift — the Brain still describes HEAD ({len(committed)} records).")
+        return 0
+
+    counts = delta.counts()
+    print(f"DRIFT: the committed Brain no longer describes the code.")
+    print(f"  +{counts['added']} -{counts['removed']} ~{counts['changed']} records")
+    print()
+    print(render_diff(delta, limit=args.limit))
+    print()
+    print("  Run `codebrain sync` and commit the result.")
+    return 1 if args.check else 0
+
+
 def cmd_eval(args: argparse.Namespace) -> int:
     from .evaluate import evaluate, render as render_eval
 
@@ -396,6 +478,7 @@ def cmd_serve(args: argparse.Namespace) -> int:
 
 
 def cmd_atlas(args: argparse.Namespace) -> int:
+    args.brain = _resolve_brain(args)
     try:
         brain = load(args.brain)
     except (BrainNotFound, ValueError) as exc:
@@ -558,6 +641,22 @@ def cmd_init(args: argparse.Namespace) -> int:
 # -- entry point -----------------------------------------------------------
 
 
+def _brain_arg(parser: argparse.ArgumentParser) -> None:
+    """Accept the Brain path positionally *and* as --brain.
+
+    Half the commands took it one way and half the other, which is the kind of
+    inconsistency that costs a minute every time and is never worth anyone's
+    while to fix later.
+    """
+    parser.add_argument("brain_pos", nargs="?", default=None, metavar="brain")
+    parser.add_argument("--brain", dest="brain_opt", default=None)
+
+
+def _resolve_brain(args: argparse.Namespace) -> str:
+    return getattr(args, "brain_opt", None) or getattr(args, "brain_pos", None) \
+        or BRAIN_DIR
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="codebrain",
@@ -582,12 +681,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_build)
 
     p = sub.add_parser("status", help="summarise a Brain")
-    p.add_argument("brain", nargs="?", default=BRAIN_DIR)
+    _brain_arg(p)
     p.add_argument("--json", action="store_true")
     p.set_defaults(func=cmd_status)
 
     p = sub.add_parser("validate", help="check a Brain for structural problems")
-    p.add_argument("brain", nargs="?", default=BRAIN_DIR)
+    _brain_arg(p)
     p.add_argument("--limit", type=int, default=25)
     p.set_defaults(func=cmd_validate)
 
@@ -631,6 +730,35 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--path", default=None)
     p.set_defaults(func=cmd_touch)
 
+    p = sub.add_parser("verify", help="execute this repo's claimed commands to "
+                                      "settle them (dry run unless --yes)")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--root", default=".")
+    p.add_argument("--intent", action="append",
+                   help="verify only this intent (test/build/lint; repeatable)")
+    p.add_argument("--timeout", type=int, default=600)
+    p.add_argument("--yes", action="store_true",
+                   help="actually run the commands listed by the dry run")
+    p.add_argument("--check", action="store_true",
+                   help="exit non-zero if any claim was refuted")
+    p.set_defaults(func=cmd_verify)
+
+    p = sub.add_parser("sync", help="rebuild if anything moved, preserving "
+                                    "verified and asserted claims")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--root", default=".")
+    p.add_argument("--force", action="store_true", help="rebuild even if unchanged")
+    p.set_defaults(func=cmd_sync)
+
+    p = sub.add_parser("drift", help="check whether the committed Brain still "
+                                     "describes HEAD (CI gate)")
+    p.add_argument("--brain", default=BRAIN_DIR)
+    p.add_argument("--root", default=".")
+    p.add_argument("--limit", type=int, default=25)
+    p.add_argument("--check", action="store_true",
+                   help="exit non-zero when the Brain has drifted")
+    p.set_defaults(func=cmd_drift)
+
     p = sub.add_parser("eval", help="measure pack retrieval against keyword search")
     p.add_argument("--brain", default=BRAIN_DIR)
     p.add_argument("--root", default=".")
@@ -649,7 +777,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_serve)
 
     p = sub.add_parser("atlas", help="regenerate the human-readable Atlas")
-    p.add_argument("brain", nargs="?", default=BRAIN_DIR)
+    _brain_arg(p)
     p.add_argument("--out", default=None, help="output path, or - for stdout")
     p.set_defaults(func=cmd_atlas)
 

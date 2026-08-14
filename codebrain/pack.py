@@ -528,7 +528,15 @@ class Compiler:
             if found is None:
                 continue
             tag = provenance_tag(found.env)
-            caveat = "" if found.env.method is Method.OBSERVED else "  (never executed)"
+            if found.env.status is Status.REFUTED:
+                # It was run, and it failed. Saying "never executed" here would
+                # be the opposite of the truth, and would send an agent off to
+                # run a command CodeBrain already knows is broken.
+                caveat = "  (EXECUTED AND FAILED — do not rely on this)"
+            elif found.env.method is Method.OBSERVED:
+                caveat = ""
+            else:
+                caveat = "  (never executed)"
             items.append(Item("runbook",
                               f"{intent:<6} {found.value}  [{tag}]{caveat}",
                               20.0 if intent == "test" else 12.0, found.id))

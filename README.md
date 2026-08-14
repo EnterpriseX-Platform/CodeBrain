@@ -20,18 +20,17 @@ begins informed instead of blind.
 
 ## Status
 
-**P2 — context packs and MCP.** Complete. A Brain now answers the only question
-that matters at the moment of work: *what is the minimum sufficient context for
-this task?* Agents reach it through an MCP server and five hooks; humans through
-the CLI.
+**P3 — verification by execution.** Complete. Claims are no longer taken on
+trust: CodeBrain runs the commands it extracted and records what happened. This
+is the line between a Brain and documentation.
 
 | Phase | Scope | State |
 |-------|-------|-------|
 | **P0** | Schema, provenance envelope, store, diff, plugin contract | ✅ done |
 | **P1** | Deterministic core — L0/L1/L4/L5 extractors, Atlas | ✅ done |
 | **P2** | Context packs, MCP server, hooks, thin L6, eval harness | ✅ done |
-| P3 | Verification by execution, drift gate | next |
-| P4 | Semantics and behavior — L2/L3, full L6 | |
+| **P3** | Verification by execution, carry-forward, sync, drift gate | ✅ done |
+| P4 | Semantics and behavior — L2/L3, full L6 | next |
 | P5 | Memory and agent write-back | |
 | P6 | Cortex — federation across repos | |
 
@@ -110,8 +109,10 @@ codebrain validate                       # structural problems, non-zero on fail
 ```
 
 ```bash
-codebrain diff old-brain new-brain --check   # the seed of the CI drift gate
+codebrain diff old-brain new-brain --check   # compare two Brains directly
 ```
+
+Every command takes the Brain path positionally or as `--brain`.
 
 ## What it extracts today
 
@@ -176,6 +177,86 @@ does — so this is a tested contract, not an aspiration.
 `guard` warns by default and never blocks. Denying an edit on inferred evidence
 would get the hook removed; hard gates wait for real compliance zones in P4, and
 are opt-in via `--deny-guarded` until then.
+
+## Verification — claims are executable
+
+*"The test command is `make test`"* is a hypothesis until something runs it.
+
+```bash
+codebrain verify
+```
+
+That is a **dry run**. It prints exactly what it would execute and stops:
+
+```
+Dry run — nothing was executed. These commands came from this repository's
+own manifests and would run as-is:
+
+  test   python -m unittest discover -s tests -t .   (from pyproject.toml)
+
+Read them, then re-run with --yes to execute and settle the claims.
+```
+
+```bash
+codebrain verify --yes
+```
+
+```
+  ok   test   python -m unittest discover -s tests -t .
+       passed in 47.4s
+
+  1 claim(s) promoted to OBSERVED · 0 refuted
+```
+
+The claim is now `OBSERVED` with the exit code, duration and command recorded as
+evidence. A failing command is **refuted**, not deleted — it keeps its place with
+the reason attached, scores 0.0 confidence, can never reach a context pack, and
+packs say *"EXECUTED AND FAILED — do not rely on this"* rather than sending the
+next agent to run something already known to be broken.
+
+**Safety.** `verify` executes commands that came out of a repository, which on
+an untrusted repo is arbitrary code execution. So it never runs from a hook or
+from `build`; it is a dry run by default and needs an explicit `--yes` with the
+command list already on screen; only commands CodeBrain itself extracted are
+candidates; servers are excluded by construction (`npm start` never returns, and
+a verifier that hangs is worse than one that never ran); and every run is
+bounded by a timeout.
+
+## Staying true — sync and the drift gate
+
+```bash
+codebrain sync
+```
+
+Rebuilds when something moved, and **carries verified and asserted claims
+forward**. This is load-bearing: extraction is deterministic, so a rebuild
+reproduces every `EXTRACTED` and `DERIVED` claim exactly — but it would also
+overwrite the two kinds it cannot regenerate, what execution proved and what a
+human stated. Without carry-forward, every build silently erases every
+verification and P3 would be pointless by the next commit.
+
+A verification only travels if the claim it proved is unchanged. Verified
+`make test`, and the command is now `pytest`? The evidence is about a different
+claim and is invalidated rather than carried — that would be the Brain lying
+with a real receipt attached.
+
+```bash
+codebrain drift --check
+```
+
+Rebuilds into memory, compares against the committed Brain, writes nothing, and
+exits non-zero when they disagree. That is the CI gate. A stale Brain misleads
+every agent downstream, which is worse than having no Brain at all.
+
+```
+DRIFT: the committed Brain no longer describes the code.
+  +2 -0 ~3 records
+
+  + L1:symbol:codebrain/gitutil.py#drift_probe
+  ~ L1:fact:|python_summary  (value)
+
+  Run `codebrain sync` and commit the result.
+```
 
 ## The Atlas
 
@@ -273,7 +354,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-253 tests, no external test runner required.
+301 tests, no external test runner required.
 
 ---
 
