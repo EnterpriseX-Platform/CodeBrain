@@ -7,7 +7,7 @@ from pathlib import Path
 from codebrain.envelope import Method
 from codebrain.model import REPO, Layer
 from codebrain.providers import BuildContext, build
-from codebrain.extractors.behavior import BehaviorProvider
+from codebrain.extractors.behavior import BehaviorProvider, app_router_path
 
 
 class TestBehavior(unittest.TestCase):
@@ -52,6 +52,65 @@ class TestBehavior(unittest.TestCase):
         self.assertIsNotNone(node)
         # A scanner is not a parser, and the envelope says so.
         self.assertIs(node.env.method, Method.DERIVED)
+
+    # -- Next.js App Router --------------------------------------------------
+
+    def test_app_router_path_derivation(self):
+        self.assertEqual(app_router_path("src/app/api/actions/incidents/route.ts"),
+                         "/api/actions/incidents")
+        self.assertEqual(app_router_path("app/api/route.ts"), "/api")
+        self.assertEqual(app_router_path("app/route.ts"), "/")
+
+    def test_app_router_path_keeps_dynamic_segments_literally(self):
+        self.assertEqual(
+            app_router_path("src/app/api/actions/incidents/[id]/ack/route.ts"),
+            "/api/actions/incidents/[id]/ack")
+
+    def test_app_router_path_drops_route_groups(self):
+        # (admin) is Next.js's own organisational convention — it never
+        # appears in the real URL, so keeping it would emit a path nothing
+        # actually answers.
+        self.assertEqual(app_router_path("src/app/(admin)/api/foo/route.ts"),
+                         "/api/foo")
+
+    def test_a_file_not_under_app_is_not_a_router_path(self):
+        self.assertIsNone(app_router_path("src/lib/route.ts"))
+
+    def test_app_router_handler_is_extracted(self):
+        brain = self._build({"src/app/api/actions/incidents/route.ts":
+                             "import { NextResponse } from 'next/server';\n"
+                             "export async function GET(req) {\n"
+                             "  return NextResponse.json({});\n"
+                             "}\n"
+                             "export async function POST(req) {\n"
+                             "  return NextResponse.json({});\n"
+                             "}\n"})
+        get_route = brain.get("L2:route:GET /api/actions/incidents")
+        post_route = brain.get("L2:route:POST /api/actions/incidents")
+        self.assertIsNotNone(get_route)
+        self.assertIsNotNone(post_route)
+        self.assertIs(get_route.env.method, Method.EXTRACTED)
+        self.assertEqual(get_route.attrs["framework"], "next-app-router")
+
+    def test_app_router_dynamic_segment_route(self):
+        brain = self._build({"src/app/api/users/[id]/route.ts":
+                             "export async function DELETE(req) {\n  return 1;\n}\n"})
+        self.assertIsNotNone(brain.get("L2:route:DELETE /api/users/[id]"))
+
+    def test_a_route_mentioned_only_in_a_comment_is_not_extracted(self):
+        # export ... function GET( inside a comment must not read as a route
+        # — the same false-positive trap the express-style scanner already
+        # guards against for string literals.
+        brain = self._build({"src/app/api/foo/route.ts":
+                             "// export async function GET(req) { old code }\n"
+                             "export async function POST(req) {\n  return 1;\n}\n"})
+        self.assertIsNone(brain.get("L2:route:GET /api/foo"))
+        self.assertIsNotNone(brain.get("L2:route:POST /api/foo"))
+
+    def test_a_file_not_named_route_is_not_scanned_as_a_router_file(self):
+        brain = self._build({"src/app/api/foo/handler.ts":
+                             "export async function GET(req) {\n  return 1;\n}\n"})
+        self.assertEqual([n for n in brain.nodes.values() if n.kind == "route"], [])
 
     def test_a_route_written_inside_a_string_is_not_a_route(self):
         brain = self._build({"server.js":

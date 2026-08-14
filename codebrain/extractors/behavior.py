@@ -47,6 +47,17 @@ TS_ROUTE = re.compile(
     r"[\"'`]([^\"'`]+)[\"'`]"
 )
 
+#: Next.js App Router: a file literally named route.ts/tsx/js/jsx under an
+#: `app` directory IS the route — the URL comes from the directory structure,
+#: not from any argument. `export async function GET(...)` is the convention;
+#: an arrow-function export is not used anywhere this was checked against, so
+#: it is left as a stated gap rather than guessed at.
+APP_ROUTE_FILENAMES = frozenset({"route.ts", "route.tsx", "route.js", "route.jsx"})
+APP_ROUTE_EXPORT = re.compile(
+    r"^export\s+(?:async\s+)?function\s+(GET|POST|PUT|PATCH|DELETE|HEAD|OPTIONS)\b",
+    re.MULTILINE,
+)
+
 
 def literal(node: ast.AST) -> str | None:
     if isinstance(node, ast.Constant) and isinstance(node.value, str):
@@ -70,6 +81,27 @@ def decorator_parts(node: ast.AST) -> tuple[str | None, str | None, list[ast.AST
     if isinstance(target, ast.Name):
         return None, target.id, call_args, keywords
     return None, None, call_args, keywords
+
+
+def app_router_path(rel: str) -> str | None:
+    """The URL a Next.js App Router file answers, from its own location.
+
+    `src/app/api/users/[id]/route.ts` -> `/api/users/[id]`. Route-group
+    folders (`(admin)`) are Next.js's own convention for organising files
+    without affecting the URL, so they are dropped rather than copied in
+    verbatim — keeping them would silently emit a path nothing ever answers.
+    Dynamic-segment brackets (`[id]`, `[...slug]`) are kept exactly as
+    written: that is the literal, unambiguous match token, and inventing a
+    different convention (`:id`) would be a translation this module has no
+    business making.
+    """
+    parts = rel.split("/")
+    try:
+        start = parts.index("app") + 1
+    except ValueError:
+        return None
+    segments = [p for p in parts[start:-1] if not (p.startswith("(") and p.endswith(")"))]
+    return "/" + "/".join(segments) if segments else "/"
 
 
 def methods_from_keywords(keywords: list[ast.keyword]) -> list[str]:
@@ -160,9 +192,12 @@ class BehaviorProvider(Provider):
         yield Fact(
             layer=Layer.L2, subject=REPO, predicate="behavior_coverage_gap",
             value={"detects": ["decorator routes", "express-style routes",
+                               "Next.js App Router route.ts handlers",
                                "__main__ entrypoints", "decorator jobs"],
                    "misses": ["Django urlpatterns", "dynamically mounted routes",
-                              "config-driven schedulers", "message consumers"],
+                              "config-driven schedulers", "message consumers",
+                              "Next.js Pages Router (pages/api/*)",
+                              "re-exported or arrow-function route handlers"],
                    "impact": "a route count of zero is not proof of no HTTP surface"},
             env=env(Method.EXTRACTED, "."),
         )
@@ -274,6 +309,22 @@ class BehaviorProvider(Provider):
 
     # -- typescript / javascript -------------------------------------------
 
+    def _app_router(self, source: str, rel: str, env) -> Iterable[Record]:
+        """A Next.js App Router route.ts file. The exported method names are
+        real HTTP handlers; the URL comes from where the file lives, not from
+        anything in it — see app_router_path."""
+        url_path = app_router_path(rel)
+        if url_path is None:
+            return
+        for match in APP_ROUTE_EXPORT.finditer(source):
+            verb = match.group(1)
+            lineno = source.count("\n", 0, match.start()) + 1
+            key = f"{verb} {url_path}"
+            yield Node(layer=Layer.L2, kind="route", key=key, name=key,
+                       env=env(Method.EXTRACTED, rel, lineno),
+                       attrs={"method": verb, "path": url_path, "module": rel,
+                              "framework": "next-app-router"})
+
     def _typescript(self, ctx, path, rel: str, env) -> Iterable[Record]:
         from .structure_ts import mask
 
@@ -281,6 +332,9 @@ class BehaviorProvider(Provider):
             source, literals = mask(path.read_text(encoding="utf-8"))
         except (OSError, UnicodeDecodeError):
             return
+
+        if path.name in APP_ROUTE_FILENAMES:
+            yield from self._app_router(source, rel, env)
 
         # Route paths are string literals, and masking replaced them with
         # placeholders — resolve back through the table.
