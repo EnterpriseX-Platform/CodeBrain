@@ -21,8 +21,9 @@ from . import (
     operations,
     semantics,
     structure_py,
+    structure_rs,
     structure_ts,
 )
 
 __all__ = ["behavior", "census", "constraints", "gitmeta", "history", "operations",
-           "semantics", "structure_py", "structure_ts"]
+           "semantics", "structure_py", "structure_rs", "structure_ts"]
