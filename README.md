@@ -52,16 +52,16 @@ nothing in it can know the answer:
 | Repository | Files | Cases | Pack recall@k | Search recall@k | Delta | Better / same / worse |
 |---|---:|---:|---:|---:|---:|---|
 | django | 2,928 `.py` | 20 | 35.0% | 35.0% | ±0.0% | 0 / 20 / 0 |
-| a private TypeScript/Next.js app | ~900 `.ts`/`.tsx` | 30 | 29.8% | 29.0% | +0.8% | 2 / 27 / 1 |
+| a private TypeScript/Next.js app (1) | ~900 `.ts`/`.tsx` | 30 | 29.8% | 29.0% | +0.8% | 2 / 27 / 1 |
+| a private TypeScript/Next.js app (2) | ~490 `.ts`/`.tsx` | 30 | 51.8% | 49.2% | +2.6% | 4 / 23 / 3 |
 | a private multi-language desktop app | ~190, mixed Rust/JS/Python | 30 | 90.1% | 82.8% | **+7.4%** | 7 / 22 / 1 |
 
-All three runs are leak-free, and all three are genuinely unfamiliar
-repositories the pack has no prior exposure to. **Two of three land at parity
-— +0.8% is not distinguishable from noise at n=30, 27 of those cases tied
-exactly.** Only the third repository shows a real, repeatable lift. Reporting
-"two data points, it depends" after the first two repos would have been
-premature; a third repo lands the honest read closer to *parity is the norm on
-file retrieval, and one repository so far is a genuine outlier* — not a
+All four runs are leak-free, and all four are genuinely unfamiliar
+repositories the pack has no prior exposure to. Three of four land within a
+few points of parity — none of those deltas clear enough wins/losses at n=30
+to call them more than noise around zero. Only one repository shows a real,
+repeatable lift. The read stands as it did at three repos: *parity is the norm
+on file retrieval, and one repository so far is a genuine outlier* — not a
 pattern this project can yet explain, and not a claim it makes about which
 repos will land where.
 
