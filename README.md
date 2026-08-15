@@ -290,6 +290,7 @@ Every command takes the Brain path positionally or as `--brain`.
 | `history` | L4 | `git log --numstat` | churn, hotspots, ownership, co-change coupling |
 | `structure-py` | L1 | Python AST | modules, symbols, imports, resolved call graph |
 | `structure-ts` | L1 | TS/JS scanner | modules, declarations, import graph, same-file call graph |
+| `structure-rs` | L1 | Rust scanner | modules, symbols (fn/struct/enum/trait/impl), `mod` graph, same-file call graph |
 | `operations` | L5 | manifests, Cargo.toml, Make, CI, Docker | build/test/run commands, pipelines, CODEOWNERS |
 | `behavior` | L2 | AST decorators/urlpatterns, file-based routes, imports | routes (Flask/FastAPI, Django, Next.js App Router, express), entrypoints, jobs, env vars, data stores |
 | `semantics` | L3 | the Brain itself | bounded-context candidates, ubiquitous language, entities |
@@ -598,7 +599,7 @@ skipped, never fatal: a partial Brain beats no Brain.
 python -m unittest discover -s tests -t .
 ```
 
-508 tests, no external test runner required.
+556 tests, no external test runner required.
 
 ---
 
