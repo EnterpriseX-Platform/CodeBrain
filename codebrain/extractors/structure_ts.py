@@ -2,15 +2,24 @@
 
 There is no TS parser in the standard library and the deterministic core takes
 no third-party dependencies, so this is a scanner: comments and string literals
-are stripped first, then declarations and import specifiers are read off the
-remaining source.
+are stripped first, then declarations, imports, and same-file calls are read
+off the remaining source.
 
 That constraint is stated in the output rather than hidden. Import specifiers
-are EXTRACTED — the text is unambiguous once strings are gone. Declarations are
-DERIVED, because a scanner will miss forms a parser would catch. And there is no
-call graph at all for TS in P1; that gap is emitted as a fact so an agent can
-see the edge of the map instead of concluding these files call nothing
-(principle vi).
+are EXTRACTED — the text is unambiguous once strings are gone. Declarations and
+calls are DERIVED, because a scanner will miss forms a parser would catch.
+
+Call resolution is same-file only, and deliberately conservative about it. A
+symbol's body is found by counting net brace depth from its declaration —
+sound for standard K&R-style bodies, blind to a body opened more than a few
+lines after its signature and to braceless single-expression arrows
+(`x => x + 1`), both stated as gaps rather than guessed at. A bare name that is
+declared more than once in the same file is never resolved to either
+occurrence: a scanner has no real scope analysis, and a wrong edge is worse
+than a missing one. Method calls (`this.helper()`, `obj.method()`) are not
+attempted at all — this pass only tracks top-level function and arrow-const
+symbols, not class methods, so resolving a `.`-qualified call would mean
+guessing at a receiver this pass cannot see.
 
 Replacing this with a real parser is a provider swap, not a rewrite — which is
 the point of the plugin contract.
@@ -53,6 +62,58 @@ DECLARATIONS = (
 )
 
 EXPORTED = re.compile(r"^\s*export\b")
+
+#: A bare call: an identifier directly followed by `(`, not reached through a
+#: `.` — `helper(x)` is a candidate, `this.helper(x)` and `obj.helper(x)` are
+#: not, because a receiver this pass does not model could resolve to a method
+#: that only coincidentally shares a top-level function's name.
+CALL = re.compile(r"(?<!\.)\b([A-Za-z_$][\w$]*)\s*\(")
+
+#: How many lines past a declaration to search for its OPENING brace before
+#: giving up. This bounds only where a body may *start* — long enough for a
+#: signature wrapped across a few lines of typed parameters, short enough
+#: that a bodyless declaration (an ambient `declare function f(): void;`)
+#: never gets misattributed to some later, unrelated block's brace. It does
+#: not bound how long the body may run once found: an early version of this
+#: function applied the same six-line limit to the whole body and silently
+#: dropped almost three-quarters of real, ordinary multi-line functions in a
+#: large real codebase — found by measuring the hit rate, not by inspection.
+OPEN_BRACE_LOOKAHEAD_LINES = 6
+
+#: A hard ceiling on total body length, once an opening brace is found —
+#: protection against a genuinely unbalanced brace count (the regex-literal
+#: blind spot documented at the top of this module) turning into an unbounded
+#: scan, not a limit real function bodies are expected to hit.
+MAX_BODY_LINES = 2000
+
+
+def find_body(lines: list[str], start_idx: int) -> tuple[int, int] | None:
+    """The 0-based (start, end) line range of a braced body beginning at or
+    after `start_idx`, by net brace depth over already-masked lines — string
+    and comment content can never contribute a stray brace, because mask()
+    has already removed it. None if no `{` appears within the open-brace
+    lookahead window at all.
+    """
+    depth = 0
+    body_start: int | None = None
+    open_search_limit = min(len(lines), start_idx + OPEN_BRACE_LOOKAHEAD_LINES)
+    i = start_idx
+    while i < len(lines):
+        if body_start is None and i >= open_search_limit:
+            return None
+        opens, closes = lines[i].count("{"), lines[i].count("}")
+        if body_start is None:
+            if opens == 0:
+                i += 1
+                continue
+            body_start = i
+        depth += opens - closes
+        if depth <= 0:
+            return body_start, i
+        if i - body_start > MAX_BODY_LINES:
+            return None
+        i += 1
+    return None
 
 
 def mask(source: str) -> tuple[str, list[str]]:
@@ -170,6 +231,7 @@ class TypeScriptStructureProvider(Provider):
         external: dict[str, int] = {}
         symbol_count = 0
         module_count = 0
+        call_count = 0
 
         for path in sorted(files):
             rel = ctx.rel(path)
@@ -199,6 +261,14 @@ class TypeScriptStructureProvider(Provider):
             # suffixed by source order rather than dropped, mirroring the same
             # fix already made for the Python extractor.
             occurrences: dict[str, int] = {}
+
+            # Collected for the call-resolution pass below, once every
+            # declaration in the file is known. bare_name_keys tracks every
+            # unique key sharing a bare name, so a call to an ambiguous name
+            # can be recognised and deliberately left unresolved rather than
+            # guessed at.
+            bare_name_keys: dict[str, list[str]] = {}
+            callable_syms: list[tuple[str, str, int]] = []  # (unique_key, kind, line_idx)
 
             for lineno, line in enumerate(lines, 1):
                 for spec in self._specifiers(line, literals):
@@ -230,7 +300,14 @@ class TypeScriptStructureProvider(Provider):
                     yield Edge(layer=Layer.L1, kind="defines", src=module_id,
                                dst=f"{Layer.L1}:symbol:{rel}#{unique}",
                                env=env(Method.DERIVED, rel, lineno, confidence=0.85))
+                    bare_name_keys.setdefault(name, []).append(unique)
+                    if kind in ("function", "const"):
+                        callable_syms.append((unique, kind, lineno - 1))
                     break
+
+            file_calls = list(self._calls(rel, lines, callable_syms, bare_name_keys, env))
+            call_count += len(file_calls)
+            yield from file_calls
 
         seen: set[tuple[str, str]] = set()
         for from_rel, to_rel, path, line in edges:
@@ -244,7 +321,7 @@ class TypeScriptStructureProvider(Provider):
 
         yield Fact(layer=Layer.L1, subject=REPO, predicate="typescript_summary",
                    value={"modules": module_count, "symbols": symbol_count,
-                          "import_edges": len(seen)},
+                          "import_edges": len(seen), "call_edges": call_count},
                    env=env(Method.EXTRACTED, "."))
 
         if external:
@@ -257,10 +334,13 @@ class TypeScriptStructureProvider(Provider):
         # State the gap rather than letting absence read as evidence of absence.
         yield Fact(
             layer=Layer.L1, subject=REPO, predicate="typescript_coverage_gap",
-            value={"call_graph": False, "type_resolution": False,
+            value={"call_graph": "same-file only", "cross_file_calls": False,
+                   "type_resolution": False,
                    "reason": "scanner-based extraction; no TS parser in the "
                              "dependency-free core",
-                   "impact": "blast radius across TS call sites is incomplete"},
+                   "impact": "blast radius across TS call sites is incomplete "
+                             "outside the declaring file, and a name declared "
+                             "more than once in one file is never resolved"},
             env=env(Method.EXTRACTED, "."),
         )
 
@@ -271,6 +351,40 @@ class TypeScriptStructureProvider(Provider):
                 index = int(match.group(1))
                 if index < len(literals) and literals[index]:
                     yield literals[index]
+
+    @staticmethod
+    def _calls(rel: str, lines: list[str], callable_syms: list[tuple[str, str, int]],
+               bare_name_keys: dict[str, list[str]], env) -> Iterable[Record]:
+        # A name resolved only when it is declared exactly once in the file —
+        # a scanner has no real scope analysis, so an ambiguous name is left
+        # unresolved rather than guessed at.
+        unambiguous = {name: keys[0] for name, keys in bare_name_keys.items()
+                       if len(keys) == 1}
+        seen: set[tuple[str, str]] = set()
+
+        for unique_key, _kind, start_idx in callable_syms:
+            body = find_body(lines, start_idx)
+            if body is None:
+                continue  # braceless arrow, or no body within the lookahead
+            body_start, body_end = body
+            src_id = f"{Layer.L1}:symbol:{rel}#{unique_key}"
+
+            for lineno in range(body_start, body_end + 1):
+                for match in CALL.finditer(lines[lineno]):
+                    name = match.group(1)
+                    target_key = unambiguous.get(name)
+                    if target_key is None or target_key == unique_key:
+                        continue  # unresolved (ambiguous/unknown), or self-recursion
+                    dst_id = f"{Layer.L1}:symbol:{rel}#{target_key}"
+                    if (src_id, dst_id) in seen:
+                        continue
+                    seen.add((src_id, dst_id))
+                    yield Edge(
+                        layer=Layer.L1, kind="calls", src=src_id, dst=dst_id,
+                        env=env(Method.DERIVED, rel, lineno + 1, confidence=0.7,
+                                note="scanned via brace-depth tracking, not "
+                                     "parsed; same-file only"),
+                    )
 
 
 register(TypeScriptStructureProvider())

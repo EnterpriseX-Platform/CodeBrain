@@ -15,6 +15,7 @@ from codebrain.extractors.structure_py import (
 )
 from codebrain.extractors.structure_ts import (
     TypeScriptStructureProvider,
+    find_body,
     mask,
     resolve_specifier,
 )
@@ -309,7 +310,8 @@ class TestTypeScriptStructure(unittest.TestCase):
         brain = self._build({"a.ts": "export const x = 1;\n"})
         gap = brain.fact(REPO, "typescript_coverage_gap")
         self.assertIsNotNone(gap)
-        self.assertFalse(gap.value["call_graph"])
+        self.assertFalse(gap.value["cross_file_calls"])
+        self.assertIn("more than once", gap.value["impact"])
 
     def test_a_name_redeclared_in_separate_scopes_keeps_both(self):
         # A closure reusing a local name (e.g. two IIFEs each defining their own
@@ -336,6 +338,131 @@ class TestTypeScriptStructure(unittest.TestCase):
             "function close() { return 2; }\n"
         )})), [TypeScriptStructureProvider()])
         self.assertEqual(result.report.kept, 0)
+
+    # -- same-file call graph -------------------------------------------------
+
+    def test_find_body_single_line(self):
+        lines = ["function foo() { return bar(); }"]
+        self.assertEqual(find_body(lines, 0), (0, 0))
+
+    def test_find_body_multi_line(self):
+        lines = ["function foo() {", "  doWork();", "}"]
+        self.assertEqual(find_body(lines, 0), (0, 2))
+
+    def test_find_body_handles_a_same_line_object_literal_default(self):
+        # The default-parameter object's own braces must net to zero on that
+        # line so they do not get mistaken for the function body closing.
+        lines = ["function foo(opts = {debug: true}) {", "  bar();", "}"]
+        self.assertEqual(find_body(lines, 0), (0, 2))
+
+    def test_find_body_handles_a_wrapped_signature(self):
+        lines = ["function foo(", "  a: number,", "  b: string,", ") {",
+                 "  bar();", "}"]
+        self.assertEqual(find_body(lines, 0), (3, 5))
+
+    def test_find_body_none_for_a_braceless_arrow(self):
+        self.assertIsNone(find_body(["const f = (x) => x + 1;"], 0))
+
+    def test_find_body_is_not_limited_to_a_short_body(self):
+        # The bug this guards against: an early version bounded the whole
+        # body to the same short window used to search for the opening
+        # brace, and silently dropped most real, ordinary functions in a
+        # large real codebase as a result.
+        lines = (["function foo() {"] + [f"  step{i}();" for i in range(40)]
+                 + ["}"])
+        self.assertEqual(find_body(lines, 0), (0, len(lines) - 1))
+
+    def test_find_body_none_when_nothing_is_within_reach(self):
+        lines = ["declare function f(): void;"] + ["x;"] * 10 + ["function g() {}"]
+        self.assertIsNone(find_body(lines, 0))
+
+    def test_a_same_file_call_is_resolved(self):
+        brain = self._build({"a.ts": (
+            "function helper() { return 1; }\n"
+            "function main() {\n"
+            "  return helper();\n"
+            "}\n"
+        )})
+        self.assertIn(("L1:symbol:a.ts#main", "L1:symbol:a.ts#helper"),
+                      edges(brain, "calls"))
+
+    def test_a_call_is_derived_not_extracted(self):
+        brain = self._build({"a.ts": (
+            "function helper() { return 1; }\n"
+            "function main() {\n  return helper();\n}\n"
+        )})
+        edge = next(e for e in brain.edges.values()
+                    if e.kind == "calls" and e.src.endswith("#main"))
+        self.assertIs(edge.env.method, Method.DERIVED)
+        self.assertIn("same-file only", edge.env.note)
+
+    def test_a_call_from_an_arrow_const_is_resolved(self):
+        brain = self._build({"a.ts": (
+            "function helper() { return 1; }\n"
+            "const main = () => {\n"
+            "  return helper();\n"
+            "};\n"
+        )})
+        self.assertIn(("L1:symbol:a.ts#main", "L1:symbol:a.ts#helper"),
+                      edges(brain, "calls"))
+
+    def test_self_recursion_produces_no_ts_edge(self):
+        brain = self._build({"a.ts": "function f() {\n  return f();\n}\n"})
+        self.assertEqual(edges(brain, "calls"), set())
+
+    def test_a_method_call_is_not_attributed_to_a_same_named_top_level_function(self):
+        # this.helper()/obj.helper() might resolve to a class method this pass
+        # does not model — attributing it to an unrelated top-level function of
+        # the same name would be a wrong edge, worse than no edge.
+        brain = self._build({"a.ts": (
+            "function helper() { return 1; }\n"
+            "class C {\n"
+            "  helper() { return 2; }\n"
+            "  run() {\n"
+            "    return this.helper();\n"
+            "  }\n"
+            "}\n"
+        )})
+        self.assertEqual(edges(brain, "calls"), set())
+
+    def test_a_name_declared_twice_is_never_resolved(self):
+        # A scanner has no real scope analysis; a wrong guess between two
+        # candidates is worse than declining to pick one.
+        brain = self._build({"a.ts": (
+            "function target() { return 1; }\n"
+            "function target() { return 2; }\n"
+            "function main() {\n  return target();\n}\n"
+        )})
+        self.assertEqual(edges(brain, "calls"), set())
+
+    def test_a_call_to_an_undeclared_name_is_not_claimed(self):
+        # `fetch` is a global, not declared anywhere in this file.
+        brain = self._build({"a.ts": "function main() {\n  return fetch('/x');\n}\n"})
+        self.assertEqual(edges(brain, "calls"), set())
+
+    def test_a_braceless_arrow_body_is_not_scanned(self):
+        brain = self._build({"a.ts": (
+            "function helper() { return 1; }\n"
+            "const main = () => helper();\n"
+        )})
+        self.assertEqual(edges(brain, "calls"), set())
+
+    def test_call_count_is_summarised(self):
+        brain = self._build({"a.ts": (
+            "function helper() { return 1; }\n"
+            "function main() {\n  return helper();\n}\n"
+        )})
+        self.assertEqual(brain.fact(REPO, "typescript_summary").value["call_edges"], 1)
+
+    def test_the_call_graph_is_deterministic(self):
+        files = {"a.ts": (
+            "function helper() { return 1; }\n"
+            "function main() {\n  return helper();\n}\n"
+        )}
+        one = self._build(files)
+        two = self._build(files)
+        self.assertEqual({e.id for e in one.edges.values() if e.kind == "calls"},
+                         {e.id for e in two.edges.values() if e.kind == "calls"})
 
     def _root(self, files: dict[str, str]) -> Path:
         tmp = tempfile.TemporaryDirectory()
